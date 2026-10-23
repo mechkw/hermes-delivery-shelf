@@ -179,12 +179,12 @@ verified byte-identical across disable, update, and removal.
 ## Compatibility and verification
 
 Tested with **Hermes v0.22.5**, official commit
-`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. The complete initial runner and native
-installation lifecycle passed against that release. The final root-policy correction
-was also verified by the full 20-test runner against development commit `bd3cbe91a9`,
-plus an independent focused review and a repeat official-release lifecycle test.
-The CI workflow pins the official release and runs the current full suite. This does
-not establish an older minimum version.
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. The full 20-test runner, native HTTP and
+registration checks, both browser-loader suites, and native installation lifecycle
+passed on that release in [GitHub CI](https://github.com/mechkw/hermes-delivery-shelf/actions/runs/40002618954).
+The root-policy correction also received an independent focused security review. The
+workflow pins the official release and reruns these gates for changes. This does not
+establish an older minimum version.
 
 Required host surfaces are native tool/command registration, request-bound home context,
 authenticated plugin API mounting, Dashboard React/fetchJSON registration, and Desktop

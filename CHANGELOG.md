@@ -3,7 +3,7 @@
 Notable user-facing changes are recorded here. Release tags identify published versions;
 this file is not a promise of future features.
 
-## Unreleased — 0.1.0
+## 0.1.0 — 2026-10-23
 
 ### Added
 
