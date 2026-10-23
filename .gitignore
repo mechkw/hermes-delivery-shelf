@@ -1,0 +1,15 @@
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.test-output/
+playwright-report/
+test-results/
+# Local implementation handoff; public reference lives in docs/TECHNICAL.md.
+IMPLEMENTATION.md
+# Runtime state and local credentials never belong in a release.
+*.sqlite
+*.sqlite3
+*.db
+.env
+.DS_Store

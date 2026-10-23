@@ -1,0 +1,1 @@
+{"name":"delivery-shelf","label":"Delivery Shelf","description":"Your collected work, intentionally saved.","version":"0.1.0","icon":"Package","tab":{"path":"/delivery-shelf","position":"end"},"entry":"dist/index.js","api":"plugin_api.py"}

@@ -1,0 +1,53 @@
+name: Verify
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      HERMES_DISABLE_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Disposable official host and homes
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/shelf"
+          mkdir -p "$scratch/account/.hermes" "$scratch/cache"
+          git clone --filter=blob:none --no-checkout https://github.com/NousResearch/hermes-agent.git "$scratch/hermes"
+          # Official v0.22.5, peeled annotated tag, not a local/custom Hermes head.
+          git -C "$scratch/hermes" checkout --detach bf0203a794a07aac3ff764972ab9087baa4e4f4e
+          test "$(git -C "$scratch/hermes" rev-parse HEAD)" = bf0203a794a07aac3ff764972ab9087baa4e4f4e
+          {
+            echo "TMPDIR=$scratch"
+            echo "HERMES_SOURCE=$scratch/hermes"
+            echo "HOME=$scratch/account"
+            echo "HERMES_HOME=$scratch/account/.hermes"
+            echo "XDG_CACHE_HOME=$scratch/cache"
+          } >> "$GITHUB_ENV"
+      - name: Test dependencies and Chromium
+        run: |
+          python -m venv "$TMPDIR/test-venv"
+          "$TMPDIR/test-venv/bin/python" -m pip install -r tests/requirements-ci.txt
+          echo "PYTHON=$TMPDIR/test-venv/bin/python" >> "$GITHUB_ENV"
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Source, native HTTP, Doctor, builds and browser contracts
+        run: bash scripts/verify.sh
+      - name: Native install lifecycle and unified Desktop synchronization
+        run: '"$PYTHON" tests/install_lifecycle.py'

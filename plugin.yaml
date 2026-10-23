@@ -1,0 +1,13 @@
+name: delivery-shelf
+version: 0.1.0
+description: "An explicit, profile-local catalog of finished deliverables for Hermes Dashboard and Desktop."
+author: Ken Watts
+license: MIT
+provides_tools:
+  - delivery_shelf_register
+  - delivery_shelf_search
+provides_commands:
+  - shelf
+python_dependencies:
+  - "fastapi>=0.115,<1"
+  - "pydantic>=2.8,<3"
