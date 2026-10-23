@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 PLUGIN_ID = "delivery-shelf"
 VERSION = "0.1.0"
 MAX_FILE = 10 * 1024 * 1024
+MAX_REVISION = 9007199254740991  # JavaScript's largest exact JSON integer.
 TEXT_TYPES = {".txt", ".md", ".csv"}
 FILE_TYPES = TEXT_TYPES | {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
 SENSITIVE = re.compile(r"(^|[._ -])(secret[s]?|credential[s]?|token[s]?|password[s]?|private|id_rsa|id_ed25519|auth|config|wallet|backup|env|db|database[s]?|key[s]?)([._ -]|$)", re.I)
@@ -78,7 +79,7 @@ class EntryInput(BaseModel):
 
 
 class EntryUpdate(EntryInput):
-    revision: int = Field(ge=1)
+    revision: int = Field(ge=1, le=MAX_REVISION)
 
 
 def bound_home() -> Path:
@@ -282,8 +283,16 @@ def update(entry_id: str, entry: EntryUpdate, store: Store = Depends(request_sto
     return store.update(entry_id, entry)
 
 
+def revision_query(revision: str = Query(..., pattern=r"^[1-9][0-9]*$", max_length=16)):
+    # Query strings carry no JSON type; reject float and boolean spellings.
+    value = int(revision)
+    if value > MAX_REVISION:
+        raise HTTPException(422, "Revision must be a positive JavaScript-safe integer")
+    return value
+
+
 @router.delete("/entries/{entry_id}")
-def delete(entry_id: str, revision: int = Query(..., ge=1), store: Store = Depends(request_store)):
+def delete(entry_id: str, revision: int = Depends(revision_query), store: Store = Depends(request_store)):
     store.delete(entry_id, revision)
     return {"deleted": entry_id, "files_deleted": False}
 

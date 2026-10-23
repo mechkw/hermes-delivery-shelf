@@ -179,9 +179,9 @@ verified byte-identical across disable, update, and removal.
 ## Compatibility and verification
 
 Tested with **Hermes v0.22.5**, official commit
-`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. The full 20-test runner, native HTTP and
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. The full 21-test runner, native HTTP and
 registration checks, both browser-loader suites, and native installation lifecycle
-passed on that release in [GitHub CI](https://github.com/mechkw/hermes-delivery-shelf/actions/runs/40002618954).
+passed on that release. [Continuous verification](https://github.com/mechkw/hermes-delivery-shelf/actions/workflows/verify.yml) reruns the same gates.
 The root-policy correction also received an independent focused security review. The
 workflow pins the official release and reruns these gates for changes. This does not
 establish an older minimum version.
@@ -193,7 +193,7 @@ atoms, and disposal hooks. Python dependencies are FastAPI and Pydantic 2.
 
 The complete runner passed after the root-policy review correction:
 
-- 20 unit/security tests, including concurrent profile contexts, revision conflicts,
+- 21 unit/security tests, including concurrent profile contexts, revision conflicts,
   and fail-closed handling of dangling policy symlinks and non-regular policy files.
 - Native unauthenticated 401, authenticated CRUD/readback, denied source files, served
   release bundle, and disabled-plugin 404 after the router was already mounted.

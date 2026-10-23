@@ -15,18 +15,18 @@ function Dialog({title, children, close}) {
 }
 
 function Editor({entry, roots, busy, error, save, close}) {
-  const [draft,setDraft]=useState(entry || fresh()), [tags,setTags]=useState((entry?.tags||[]).join(', '));
+  const [draft,setDraft]=useState(entry || fresh()), [tags,setTags]=useState((entry?.tags||[]).join('\n'));
   const [root,setRoot]=useState(entry?.file?.root||roots[0]||''), [path,setPath]=useState(entry?.file?.path||'');
   const change=(key,value)=>setDraft(d=>({...d,[key]:value}));
   return <Dialog title={entry ? 'Edit delivery' : 'Add a delivery'} close={()=>{if(!busy)close();}}>
-    <form onSubmit={e=>{e.preventDefault();save({...draft,tags:tags.split(',').map(t=>t.trim()).filter(Boolean),file:path.trim()?{root,path:path.trim()}:null});}}>
+    <form onSubmit={e=>{e.preventDefault();save({...draft,tags:tags.split('\n').map(t=>t.trim()).filter(Boolean),file:path.trim()?{root,path:path.trim()}:null});}}>
       <p className="ds-muted">Save only the work you choose. Files stay where they are.</p>
       <label>Title<input data-initial-focus required maxLength={160} value={draft.title} onChange={e=>change('title',e.target.value)}/></label>
       <label>Description<textarea rows={3} maxLength={4000} value={draft.description} onChange={e=>change('description',e.target.value)}/></label>
       <div className="ds-two"><label>Kind<select value={draft.kind} onChange={e=>change('kind',e.target.value)}>{kinds.map(k=><option key={k}>{k}</option>)}</select></label>
       <label>Project<input maxLength={100} value={draft.project} onChange={e=>change('project',e.target.value)}/></label></div>
       <label>Session reference <span className="ds-muted">optional; not verified provenance</span><input maxLength={160} pattern="[A-Za-z0-9_.:\-]*" value={draft.session_id||''} onChange={e=>change('session_id',e.target.value)}/></label>
-      <label>Tags <span className="ds-muted">comma-separated</span><input value={tags} maxLength={820} onChange={e=>setTags(e.target.value)}/></label>
+      <label>Tags (one per line)<textarea aria-label="Tags (one per line)" rows={3} value={tags} maxLength={820} onChange={e=>setTags(e.target.value)}/></label>
       <fieldset><legend>Optional registered file</legend><p className="ds-muted">Approved roots only. Text, PDF and raster images; up to 10 MiB. Hidden files, sensitive names, symlinks and hard links are refused.</p>
         <label>Approved root<select value={root} onChange={e=>setRoot(e.target.value)}><option value="" disabled>Select root</option>{roots.map(r=><option key={r}>{r}</option>)}</select></label>
         <label>Relative file path<input value={path} maxLength={1024} onChange={e=>setPath(e.target.value)} placeholder="project/final-report.pdf"/></label>

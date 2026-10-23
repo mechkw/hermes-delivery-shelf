@@ -107,7 +107,8 @@ changes what a later download retrieves; registering a file does not freeze or c
 
 ## Edit or remove an entry
 
-Use the shelf's edit controls to change metadata. Saving carries the revision you
+Use the shelf's edit controls to change metadata. Enter one tag per line; commas inside
+a tag remain part of that tag. Saving carries the revision you
 loaded. If another client changed the entry, refresh before editing again; the plugin
 will not silently replace their newer version.
 

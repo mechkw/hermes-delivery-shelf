@@ -96,6 +96,30 @@ class ShelfTests(unittest.TestCase):
         self.assertEqual(self.client.delete(self.base+"/entries/"+item["id"]+"?revision=1").status_code,200)
         self.assertEqual(self.client.get(self.base+"/entries/"+item["id"]).status_code,404)
 
+    def test_revision_bounds_and_strict_types(self):
+        item = self.client.post(self.base + '/entries', json={'title': 'Bounds'}).json()
+        url = self.base + '/entries/' + item['id']
+        maximum = 9007199254740991
+        for revision in (0, -1, maximum + 1, 9223372036854775808, 10**100, True, 1.5, '1', None):
+            with self.subTest(revision=revision):
+                with self.assertRaises(ValidationError):
+                    api.EntryUpdate(title='Changed', revision=revision)
+                self.assertEqual(self.client.put(url, json={'title': 'Changed', 'revision': revision}).status_code, 422)
+                self.assertEqual(self.client.get(url).json(), item)
+        for revision in ('0', '-1', str(maximum + 1), '9223372036854775808', str(10**100), 'true', '1.5', '1.0', '1e0', 'nope'):
+            with self.subTest(query=revision):
+                self.assertEqual(self.client.delete(url, params={'revision': revision}).status_code, 422)
+                self.assertEqual(self.client.get(url).json(), item)
+        self.assertEqual(api.EntryUpdate(title='Bounds', revision=maximum).revision, maximum)
+        self.assertEqual(self.client.put(url, json={'title': 'Changed', 'revision': maximum}).status_code, 409)
+        self.assertEqual(self.client.delete(url, params={'revision': maximum}).status_code, 409)
+        self.assertEqual(self.client.get(url).json(), item)
+        updated = self.client.put(url, json={'title': 'Changed', 'revision': 1})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()['revision'], 2)
+        self.assertEqual(self.client.delete(url, params={'revision': 2}).status_code, 200)
+        self.assertEqual(self.client.get(url).status_code, 404)
+
     def test_profile_hint_refused(self):
         self.assertEqual(self.client.get(self.base+"/status?profile=other").status_code,409)
         self.assertEqual(self.client.get(self.base+"/status?profile=default").status_code,200)
