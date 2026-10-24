@@ -11,7 +11,7 @@
   <a href="docs/TECHNICAL.md">Technical guide</a>
 </p>
 
-![An original editorial illustration of collected creative work](docs/assets/hero.webp)
+![Delivery Shelf — a winged messenger handing off finished work, with fractured cream-and-gold lettering and digital halftone texture](docs/assets/hero.webp)
 
 **Your conversations move on. Your finished work shouldn't disappear into them.**
 
