@@ -1,11 +1,17 @@
 name: delivery-shelf
 version: 0.1.0
+requires_hermes: ">=0.22.5"
 description: "An explicit, profile-local catalog of finished deliverables for Hermes Dashboard and Desktop."
 author: Ken Watts
 license: MIT
 provides_tools:
   - delivery_shelf_register
   - delivery_shelf_search
+  - delivery_shelf_update
+  - delivery_shelf_offer_update
+provides_hooks:
+  - on_session_reset
+  - on_session_delete
 provides_commands:
   - shelf
 python_dependencies:

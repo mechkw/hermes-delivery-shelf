@@ -38,7 +38,7 @@ function Editor({entry, roots, busy, error, save, close}) {
   </Dialog>;
 }
 
-export function Shelf({api}) {
+export function Shelf({api,embedded=false}) {
   const [status,setStatus]=useState(null), [data,setData]=useState({items:[],total:0}), [loading,setLoading]=useState(true), [error,setError]=useState('');
   const [filters,setFilters]=useState({q:'',tag:'',kind:'',project:''}), [offset,setOffset]=useState(0), [refresh,setRefresh]=useState(0);
   const [editor,setEditor]=useState(undefined), [selected,setSelected]=useState(null), [removing,setRemoving]=useState(null);
@@ -96,9 +96,9 @@ export function Shelf({api}) {
     }catch(e){if(alive.current && ticket===fileSerial.current)setActionError(message(e));}
     finally{if(alive.current)setBusy(false);}
   }
-  return <main className="ds ds-shelf">
+  return <section className="ds ds-shelf">
     <style>{styles}</style>
-    <header className="ds-header"><div><p className="ds-eyebrow">COLLECTED WORK <span> / {status?.profile||'your profile'}</span></p><h1>Delivery Shelf<span aria-hidden="true">.</span></h1><p className="ds-subtitle">The work worth keeping, right at hand.</p></div>
+    <header className="ds-header"><div><p className="ds-eyebrow">COLLECTED WORK <span> / {status?.profile||'your profile'}</span></p>{embedded?<h2>Deliverables</h2>:<h1>Delivery Shelf<span aria-hidden="true">.</span></h1>}<p className="ds-subtitle">The work worth keeping, right at hand.</p></div>
       <button className="ds-primary" disabled={!status} onClick={()=>{close();setEditor(null);}}>＋ Add delivery</button></header>
     <section aria-label="Filter deliveries" className="ds-filters">
       <label className="ds-search">Search<input type="search" placeholder="Find a title or description…" maxLength={200} value={filters.q} onChange={e=>filter('q',e.target.value)}/></label>
@@ -128,5 +128,5 @@ export function Shelf({api}) {
       <div className="ds-actions"><button disabled={busy} onClick={()=>{const item=selected;close();setEditor(item);}}>Edit metadata</button><button className="ds-danger" disabled={busy} onClick={()=>{const item=selected;close();setRemoving(item);}}>Remove from shelf</button></div>
     </Dialog>}
     {removing&&<Dialog title="Remove this delivery?" close={()=>{if(!busy)close();}}><p><strong>{removing.title}</strong> will be removed from this profile’s shelf.</p><p>Only metadata is removed. The original file will not be deleted.</p>{actionError&&<p role="alert" className="ds-error">{actionError}</p>}<div className="ds-actions"><button data-initial-focus disabled={busy} onClick={close}>Keep delivery</button><button className="ds-danger" disabled={busy} onClick={remove}>{busy?'Removing…':'Remove metadata'}</button></div></Dialog>}
-  </main>;
+  </section>;
 }

@@ -17,7 +17,7 @@
 
 Delivery Shelf gives deliberately saved outputs a title, a project, and a few useful tags. Find a report by what it was for, not by the filename you half remember. Edit its description. Preview a text file. Download an allowed attachment. Remove the card when you no longer need it—without deleting the original file.
 
-No background folder sweeps. No extra model calls. No second cloud account.
+No background folder sweeps. No second cloud account. Your existing Hermes agent can fill in the details when you save.
 
 ## Quick start
 
@@ -72,13 +72,31 @@ From chat, use:
 
 ```text
 /shelf launch
+/shelf add --file workspaces:launch/report.pdf
+/shelf add Spring launch report #launch, final --description "Approved launch summary." --file workspaces:launch/report.pdf
 ```
+
+`/shelf <query>` searches. On configured Telegram connections, bare `/shelf` opens
+an attached inline panel: **Add**, recent entries, then **Browse more**.
+`/shelf add` asks the agent to save the most recent artifact(s) already identifiable
+in the current conversation—never a folder scan. Use `--file` to choose an exact
+existing file instead. [Telegram owner policy, derivative offers, and limits →](docs/TELEGRAM.md)
+Leave out the title, tags or description and your current Hermes agent generates
+the missing details, saves the entry, and confirms all three in one short reply.
+Anything you supply takes precedence. Tags keep their first spelling/case, with boundary
+whitespace trimmed and case-insensitive duplicates removed. Tag filtering remains
+case-insensitive. There is no metadata questionnaire.
+
+Tags are comma-separated after `#`; use `--description "text"` to set the description.
+Quote file references containing spaces. Supplying all details saves directly without
+a model turn. Agent-assisted chat commands need Hermes’s [one-time handoff permission](docs/OPERATIONS.md#enable-agent-assisted-metadata).
+Use `/shelf search add` to search for the word “add.”
 
 Or ask Hermes:
 
 > “Find the final reports in my Delivery Shelf for the Website project.”
 
-The plugin's native tools are `delivery_shelf_register` and `delivery_shelf_search`. Editing and removal live in the UI. [Structured examples and API details →](docs/TECHNICAL.md)
+Want a correction? Ask Hermes to change the saved title, tags or description; it updates the existing entry rather than making another card. Native tools are `delivery_shelf_register`, `delivery_shelf_search`, `delivery_shelf_update`, and `delivery_shelf_offer_update`. The last offers a new derivative for approval; same-file edits stay silent. Removal remains in the UI. [Structured examples and API details →](docs/TECHNICAL.md)
 
 ## Files stay where they belong
 
@@ -97,7 +115,7 @@ A moved or deleted file may make its attachment unavailable. The card can still 
 - **Profile-local:** each backend profile has its own catalog.
 - **Explicit:** no automatic transcript capture or folder scanning.
 - **Host-authenticated:** the UI uses Hermes's existing authentication and backend routes.
-- **No plugin telemetry:** no analytics service, remote index, or model calls.
+- **No plugin telemetry:** no analytics service or remote index. Assisted saves use your existing Hermes agent/provider; the plugin has no separate model client.
 - **Persistent:** plugin data survives ordinary updates and uninstall; removing the package is not data erasure.
 
 “Local” means local to your Hermes backend, which can be a remote server. Other software running under the same OS account is not sandboxed by this plugin. [Storage, retention, backup, and removal →](docs/OPERATIONS.md#storage-and-retention)

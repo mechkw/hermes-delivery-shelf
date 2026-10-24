@@ -5,7 +5,7 @@ import sys
 import tempfile
 from native_probe import prepare, host, ROOT
 
-with tempfile.TemporaryDirectory(prefix='dsb-', dir=os.environ.get('TMPDIR')) as directory:
+with tempfile.TemporaryDirectory(prefix='dsb-', dir=sys.argv[2]) as directory:
     home=Path(directory)/'home'
     prepare(home)
     ws=host(home)

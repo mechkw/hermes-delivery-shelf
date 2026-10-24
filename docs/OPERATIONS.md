@@ -37,6 +37,69 @@ install a native Android or iOS application.
 Keep your existing Hermes authentication. The plugin does not create a public file
 server or require new inbound ports.
 
+## Telegram and chat slash commands
+
+```text
+/shelf
+/shelf launch
+/shelf search add
+/shelf add --file workspaces:launch/report.pdf
+/shelf add Approved artwork #branding, plugins --file "workspaces:launch/approved artwork.png"
+/shelf add Approved artwork #branding --description "Selected release hero." --file workspaces:launch/hero.webp
+```
+
+**Supply as little metadata as you like.** The current Hermes agent generates any
+missing title, tags and description using the conversation and selected filename,
+saves the entry, verifies it, and confirms the saved details in one short reply.
+It preserves anything you supply rather than asking you to fill out a form. Supplying
+all three fields saves directly without an agent turn. An explicit empty description
+(`--description ""`) is preserved; an empty tag section is invalid.
+
+**Telegram setup:** [owner policy, inline panels, derivative offers and exact limits](TELEGRAM.md).
+The configured Telegram bare command shows attached inline rows; unavailable/isolated
+hosts retain an explicitly labeled text fallback. A query lists up to 20 matches.
+`add`, `search`, and `help` are reserved leading commands. Use `/shelf search <query>`
+when a query begins with a reserved word; `/shelf help` shows syntax.
+
+Bare `add` asks the current agent for the most recent artifact(s) already identifiable
+from the current conversation; ambiguous or absent candidates require clarification.
+No folder scans or newest-mtime selection occur. The optional explicit `--file`
+reference is `<approved-root-alias>:<relative-path>` on the backend,
+not a Telegram file ID or a path on your phone. Quote references containing spaces.
+All existing file safety and approved-root checks still apply.
+
+The optional title is unquoted free text; apostrophes and `C#` are preserved. A
+whitespace-separated `#` starts comma-separated tags. Use `--description "text"` for
+an explicit description, with `--file` and `--description` after the title/tag portion
+in either order. Empty tags are rejected. Use the UI or native tool for tags containing
+literal commas. Tags retain their first spelling/case after boundary trimming and
+case-insensitive deduplication. Tag filters remain case-insensitive, including older
+lowercase entries; existing entries are not rewritten.
+
+Fully specified slash saves default to the `document` kind. Use the UI or structured
+tool to set kind, project, or other fields. Commands/panels do not send the
+attached file into Telegram. Asking Hermes to send the file is a separate action.
+
+### Enable agent-assisted metadata
+
+Enable the plugin normally, then grant native handoff permission in the intended
+profile once:
+
+```sh
+hermes config set plugins.entries.delivery-shelf.allow_gateway_injection true
+```
+
+This permits the plugin's explicit save command to hand work to the existing Hermes
+agent in the invoking session. The plugin does not create another model client or
+collect transcripts; the normal agent/provider processes its conversation context.
+Normal inference costs apply to assisted saves. Searches and fully specified saves
+remain model-free.
+
+If native session context or handoff permission is unavailable, nothing is saved and
+the command explains the problem. Queue acceptance is not completion: the agent's
+final response comes after saving and checking the actual entry. No placeholder card
+or optimistic success message is created while waiting.
+
 ## Attach a file
 
 File references contain a **root alias** and a **relative path**, not an arbitrary

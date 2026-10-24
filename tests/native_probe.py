@@ -14,7 +14,7 @@ def prepare(home):
     home.mkdir(parents=True, exist_ok=True)
     package=home/'plugins/delivery-shelf'
     package.mkdir(parents=True)
-    for filename in ('plugin.yaml','__init__.py'):
+    for filename in ('plugin.yaml','__init__.py','telegram_shelf.py'):
         shutil.copy2(ROOT/filename,package/filename)
     for folder in ('dashboard','desktop'):
         shutil.copytree(ROOT/folder,package/folder,ignore=shutil.ignore_patterns('__pycache__'))
@@ -63,11 +63,47 @@ def probe():
             assert client.get(prefix+'/entries/'+entry['id'],headers=headers).json()['title']=='Native mount proof'
             assert client.get('/dashboard-plugins/delivery-shelf/plugin_api.py',headers=headers).status_code in (403,404)
             assert client.get('/dashboard-plugins/delivery-shelf/dist/index.js',headers=headers).status_code==200
+            # Native loader registration → command dispatcher → public HTTP readback.
+            from hermes_cli.plugins import get_plugin_command_handler
+            from hermes_cli.plugin_command_dispatch import invoke_plugin_command
+            handler = get_plugin_command_handler('shelf')
+            assert callable(handler)
+            reply = invoke_plugin_command(handler, 'add Slash proof #native, telegram --description "Fictional proof." --file workspaces:example.md',
+                                          session_id='fictional-native-session', platform='telegram')
+            assert 'Saved to Delivery Shelf: Slash proof' in reply, reply
+            matches = client.get(prefix+'/entries?q=Slash%20proof',headers=headers).json()
+            assert matches['total'] == 1, matches
+            assert matches['items'][0]['tags'] == ['native', 'telegram']
+            assert matches['items'][0]['session_id'] == 'fictional-native-session'
+            # Native consent + routing boundary. The receiving gateway is a capture
+            # double here: queued is deliberately NOT claimed as a completed save.
+            from hermes_cli.plugins import get_plugin_manager
+            manager = get_plugin_manager()
+            owner, queued = object(), []
+            def receive(**payload):
+                queued.append(payload)
+                return True
+            manager.set_gateway_message_injector(owner, receive)
+            try:
+                args = 'add --file workspaces:example.md'
+                context = {'session_id': 'fictional-native-session', 'session_key': 'telegram:fictional', 'platform': 'telegram'}
+                denied = invoke_plugin_command(handler, args, **context)
+                assert 'not saved' in denied and not queued, denied
+                (home/'config.yaml').write_text('plugins:\n  enabled: [delivery-shelf]\n  isolation: in_process\n  entries:\n    delivery-shelf:\n      allow_gateway_injection: true\n')
+                accepted = invoke_plugin_command(handler, args, **context)
+                assert accepted is None and len(queued) == 1, (accepted, queued)
+                assert queued[0]['session_key'] == 'telegram:fictional'
+                assert Path(queued[0]['plugin_home']).resolve() == home.resolve()
+                assert queued[0]['plugin_id'] == 'delivery-shelf'
+                assert '"missing": ["title", "tags", "description"]' in queued[0]['content']
+                assert client.get(prefix+'/entries',headers=headers).json()['total'] == 2
+            finally:
+                manager.clear_gateway_message_injector(owner)
             # Live effective policy gate must close an already-mounted router.
             (home/'config.yaml').write_text('plugins:\n  enabled: []\n  disabled: [delivery-shelf]\n  isolation: in_process\n')
             r=client.get(prefix+'/status',headers=headers)
             assert r.status_code==404,(r.status_code,r.text)
-        print('NATIVE API: 401 unauthenticated; authenticated discovery/CRUD/readback 200/201; Python source denied; bundle served; disabled router 404.')
+        print('NATIVE API: 401 unauthenticated; authenticated CRUD and native slash-command save/readback; Python source denied; bundle served; disabled router 404.')
 
 
 if __name__=='__main__':probe()

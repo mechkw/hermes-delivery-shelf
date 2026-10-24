@@ -68,18 +68,24 @@ class EntryInput(BaseModel):
     @field_validator("tags")
     @classmethod
     def clean_tags(cls, values):
-        result = []
+        result, seen = [], set()
         for value in values:
-            value = value.strip().lower()
+            value = value.strip()
             if not value or len(value) > 40 or any(ord(c) < 32 for c in value):
                 raise ValueError("Tags must be 1–40 printable characters")
-            if value not in result:
+            key = value.casefold()
+            if key not in seen:
+                seen.add(key)
                 result.append(value)
         return result
 
 
 class EntryUpdate(EntryInput):
     revision: int = Field(ge=1, le=MAX_REVISION)
+
+
+class ToolEntryUpdate(EntryUpdate):
+    id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
 def bound_home() -> Path:
@@ -178,6 +184,8 @@ class Store:
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
+        # SQLite lower/NOCASE only fold ASCII; match the Unicode validator instead.
+        conn.create_function("tag_casefold", 1, str.casefold, deterministic=True)
         try:
             with conn:
                 yield conn
@@ -207,31 +215,44 @@ class Store:
                 clauses.append(f"json_extract(payload,'$.{key}') = ?")
                 params.append(value)
         if tag:
-            clauses.append("EXISTS (SELECT 1 FROM json_each(payload,'$.tags') WHERE value=?)")
-            params.append(tag.lower())
+            clauses.append("EXISTS (SELECT 1 FROM json_each(payload,'$.tags') WHERE tag_casefold(value)=?)")
+            params.append(tag.casefold())
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connect() as conn:
             total = conn.execute("SELECT count(*) FROM entries" + where, params).fetchone()[0]
             rows = conn.execute("SELECT * FROM entries" + where + " ORDER BY updated DESC,id LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
         return {"items": [self.decode(row) for row in rows], "total": total, "limit": limit, "offset": offset}
 
-    def create(self, entry: EntryInput):
-        if entry.file:
-            with open_file(self.home, entry.file):
-                pass
+    def create(self, entry: EntryInput, *, authorize_commit=None):
         entry_id, now = uuid.uuid4().hex, time.time()
         with self.connect() as conn:
+            # Obtain the write reservation BEFORE final policy/lifecycle checks.
+            # Callers must run this synchronous method in a worker, not a transport loop.
+            conn.execute("BEGIN IMMEDIATE")
+            if entry.file:
+                with open_file(self.home, entry.file):
+                    pass
+            if authorize_commit:
+                authorize_commit()
             conn.execute("INSERT INTO entries VALUES (?,?,?,?,1)", (entry_id, entry.model_dump_json(), now, now))
         return self.get(entry_id)
 
-    def update(self, entry_id, entry: EntryUpdate):
-        current = self.get(entry_id)
-        # Unchanged references can be edited or removed even if the file vanished.
-        if entry.file and entry.file.model_dump() != current["file"]:
-            with open_file(self.home, entry.file):
-                pass
+    def update(self, entry_id, entry: EntryUpdate, *, authorize_commit=None):
         payload = entry.model_dump(exclude={"revision"})
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM entries WHERE id=?", (entry_id,)).fetchone()
+            if row is None:
+                raise HTTPException(404, "Delivery not found")
+            current = self.decode(row)
+            if current['revision'] != entry.revision:
+                raise HTTPException(409, "Delivery changed elsewhere; refresh before saving")
+            # Unchanged references can be edited or removed even if the file vanished.
+            if entry.file and entry.file.model_dump() != current["file"]:
+                with open_file(self.home, entry.file):
+                    pass
+            if authorize_commit:
+                authorize_commit()
             changed = conn.execute("UPDATE entries SET payload=?,updated=?,revision=revision+1 WHERE id=? AND revision=?", (json.dumps(payload), time.time(), entry_id, entry.revision)).rowcount
         if not changed:
             raise HTTPException(409, "Delivery changed elsewhere; refresh before saving")

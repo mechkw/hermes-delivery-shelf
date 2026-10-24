@@ -19,7 +19,9 @@ Desktop   → native ctx.rest  → authenticated API ┘       │
 ## Package map
 
 - `plugin.yaml`, `VERSION`: package identity, capabilities, dependencies, version.
-- `__init__.py`: two tools and the `/shelf` command; synchronized lazy service loading.
+- `__init__.py`: four tools and the `/shelf` command; synchronized lazy service loading.
+- `telegram_shelf.py`: profile-owned PTB panels, guarded Add requests and derivative offers;
+  [implementation limits and verification](TELEGRAM.md).
 - `dashboard/plugin_api.py`: input models, catalog, file policy, and FastAPI routes.
 - `dashboard/manifest.json`: Dashboard page declaration.
 - `ui/Shelf.jsx`, `ui/style.css`: shared React view and scoped styles.
@@ -63,7 +65,7 @@ does not invent a session URL or promise automatic conversation reopening.
 - Description: at most 4,000 characters.
 - Kind: `document`, `image`, `report`, `code`, or `other`.
 - Project: trimmed, at most 100 characters.
-- Tags: at most 20; each 1–40 printable characters, trimmed, lowercased, deduplicated.
+- Tags: at most 20; each 1–40 printable characters, boundary-trimmed, case-insensitively deduplicated (Unicode casefold), retaining the first spelling/case.
 - File: `null` or a root alias and relative path. Never a browser-selected absolute path.
 - Session ID: optional, at most 160 characters, limited to letters, digits, `_`, `.`, `:`, and `-`.
 - Unknown input keys are rejected.
@@ -72,6 +74,29 @@ Saved entries add an opaque ID, Unix-second `created` and `updated` timestamps, 
 integer `revision`. The `kind` label describes a delivery; it does not override the
 attachment extension allowlist. A `code` card cannot make an executable downloadable.
 
+## Assisted command saves
+
+`/shelf add` parses optional title, tags and `--description`, validates the selected
+file through the existing root/file policy, and determines which metadata is absent.
+With all fields supplied it saves directly. Otherwise it uses the supported
+`PluginContext.inject_message` to queue a user-requested task for the **current**
+native session, preserving supplied fields as JSON data. Missing native context or
+denied handoff produces a clear failure without storing a placeholder entry.
+
+The normal Hermes agent generates only missing fields from its existing conversation
+context and the selected filename, calls the registration tool, reads the entry back
+with the search tool, and then confirms title, tags and description. The command
+returns no interim success for an accepted queue request: acceptance is not completion.
+Provider costs and normal agent-context processing apply to assisted saves. The
+plugin itself does not retrieve transcripts, create a second model client, or scan
+folders. Supplying all fields and ordinary searches do not invoke the model.
+
+Official v0.22.5 provides this injection API. Gateway/modern-host handoff needs
+`plugins.entries.delivery-shelf.allow_gateway_injection: true`. Missing permission
+fails closed. Native integration tests cover permission denial/acceptance and exact
+session-key/profile routing with a capture gateway, separately from real-model tests;
+they do not represent a live Telegram transport test.
+
 ## Searching
 
 `delivery_shelf_search` accepts `q`, `tag`, `kind`, `project`, `limit`, and `offset`.
@@ -79,8 +104,28 @@ Search is a literal substring match over titles/descriptions, with exact filters
 labels. It does not search attachment contents or conversation transcripts. The default
 page has 50 items; the maximum is 100. Offset is bounded at 1,000,000.
 
-Both native tools return a JSON string containing `{ "ok": true, "data": ... }` or
-`{ "ok": false, "error": ... }`. `/shelf [search text]` returns up to 20 matching entries.
+Exact tag filtering compares Unicode casefolded values with bound SQL parameters,
+not SQLite's ASCII-only `lower`/`NOCASE`. It matches existing lowercase and new
+mixed-case records without migration; display spelling and order are unchanged by
+reads. Commas, quotes, `%` and `_` remain literal tag characters, not patterns or SQL.
+Casefold is not accent removal or Unicode normalization. Title/description search
+semantics are unchanged.
+
+
+All native tools return a JSON string. CRUD/search uses `{ "ok": true, "data": ... }`
+or `{ "ok": false, "error": ... }`; the offer tool instead returns an explicit
+`status` and, for sent offers, `saved: false`. `/shelf [search text]` returns up to
+20 matching entries. Bare Telegram `/shelf` can send a native panel and return `None`;
+its sync handler returns an awaitable only on that native branch, which the v0.22.5
+gateway dispatcher awaits. See [Telegram behavior and limits](TELEGRAM.md).
+
+### Correcting metadata
+
+`delivery_shelf_update` accepts the full registration metadata plus `id` and the
+current positive safe-integer `revision`. Search first, preserve unchanged fields,
+update the same ID, then read back. It uses the same revision checks and validation
+as UI edits; stale updates fail instead of creating duplicate cards or overwriting
+newer changes. It does not modify or remove the original file.
 
 ## HTTP API
 
@@ -186,6 +231,28 @@ The root-policy correction also received an independent focused security review.
 workflow pins the official release and reruns these gates for changes. This does not
 establish an older minimum version.
 
+### Tag-casing correction verification (unreleased)
+
+After the supplied-tag casing correction, the installed-host run passed **33
+unittest tests**, `tests/native_probe.py`, and `tests/native_contract.py` (Doctor:
+3 tools, zero findings; catalog: 16 checks, zero warnings). New regressions preserve
+`OpsCase` / `Keep-Tag` through direct slash saves and handoff-to-fixture completion,
+and cover API create/update/readback, legacy lowercase filters, Unicode casefold,
+case-insensitive deduplication, literal commas, and SQL-like tag input. The same full
+unittest, native probe and contract checks also passed against an isolated archive
+of official Hermes v0.22.5 after the correction.
+
+A separate real native `AIAgent` run passed three fictional cases for this plugin:
+all metadata omitted; exact title and mixed-case tags supplied; exact description
+supplied. Each generated only missing metadata, saved once to actual plugin SQLite,
+searched the stored entry, and returned its title, tags and description. Independent
+readback confirmed supplied values and source references; source hashes stayed
+unchanged across the runs.
+
+That test used a capture callback to obtain the command handoff and a real model
+for subsequent agent/tool execution. It is not live Telegram delivery or a
+browser/Electron test. All fixture homes were removed; production remains unchanged.
+
 Required host surfaces are native tool/command registration, request-bound home context,
 authenticated plugin API mounting, Dashboard React/fetchJSON registration, and Desktop
 unified-package loading with `ctx.rest`, route/sidebar contributions, profile/connection
@@ -214,5 +281,6 @@ user themes are not covered by the two measured palettes.
 
 Version 0.1 does not include automatic capture, generic filesystem browsing, uploads,
 transcript indexing, automatic session reopening, bulk actions, import/export, immutable
-file copies, or request-ID deduplication. Keeping the scope small makes the privacy and
-file-access rules easier to understand and test.
+file copies, or general CRUD request-ID deduplication. Telegram Add requests have
+bounded, short-lived duplicate-file protection only; see [Telegram limits](TELEGRAM.md).
+Keeping the scope small makes the privacy and file-access rules easier to understand and test.

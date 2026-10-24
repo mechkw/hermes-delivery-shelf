@@ -61,10 +61,46 @@ class ShelfTests(unittest.TestCase):
         path.write_bytes(content)
         return api.FileRef(root="workspaces", path=name)
 
+    def test_api_preserves_tag_case_and_filters_old_and_new_spellings(self):
+        app = FastAPI()
+        app.include_router(api.router)
+        with patch.object(api, 'bound_home', return_value=self.home), TestClient(app) as client:
+            payload = {'title': 'OpsCase', 'tags': [' Keep-Tag ', 'keep-tag', 'Équipe', 'équipe',
+                       'Straße', 'STRASSE', 'Design, Decisions', "100%_' OR 1=1 --"]}
+            response = client.post('/entries', json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            item = response.json()
+            expected = ['Keep-Tag', 'Équipe', 'Straße', 'Design, Decisions', "100%_' OR 1=1 --"]
+            self.assertEqual(item['title'], 'OpsCase')
+            self.assertEqual(item['tags'], expected)
+            path = '/entries/' + item['id']
+            self.assertEqual(client.get(path).json(), item)
+            # Lowercase rows represent the previously persisted format; do not migrate them.
+            legacy = client.post('/entries', json={**payload, 'tags': ['keep-tag', 'équipe']}).json()
+            for tag, ids in [('KEEP-TAG', {item['id'], legacy['id']}),
+                             ('ÉQUIPE', {item['id'], legacy['id']}),
+                             ('strasse', {item['id']}), ('DESIGN, decisions', {item['id']}),
+                             ("100%_' OR 1=1 --", {item['id']}),
+                             ('Design', set()), ('%', set()), ("' OR 1=1 --", set())]:
+                with self.subTest(tag=tag):
+                    response = client.get('/entries', params={'tag': tag})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    result = response.json()
+                    self.assertEqual(result['total'], len(ids))
+                    self.assertEqual({entry['id'] for entry in result['items']}, ids)
+            updated = client.put(path, json={**payload, 'revision': item['revision'],
+                                            'tags': [' NEW-Tag ', 'new-tag', 'ÉQUIPE', 'équipe']})
+            self.assertEqual(updated.status_code, 200, updated.text)
+            self.assertEqual(updated.json()['tags'], ['NEW-Tag', 'ÉQUIPE'])
+            self.assertEqual(client.get(path).json(), updated.json())
+            self.assertEqual(client.get('/entries', params={'tag': 'new-TAG'}).json()['items'],
+                             [updated.json()])
+            self.assertEqual(client.get('/entries/' + legacy['id']).json(), legacy)
+
     def test_crud_readback_revision_and_metadata_only_delete(self):
         ref = self.file()
         created = self.create(file=ref, tags=["Done", "done"], project="North")
-        self.assertEqual(created["tags"], ["done"])
+        self.assertEqual(created["tags"], ["Done"])
         edit = api.EntryUpdate.model_validate({**{k:v for k,v in created.items() if k not in ("id","created","updated")}, "title":"Changed"})
         updated = self.store.update(created["id"], edit)
         self.assertEqual(updated["revision"], 2)
@@ -249,7 +285,7 @@ class ShelfTests(unittest.TestCase):
             def register_tool(self,**kwargs):self.tools[kwargs['name']]=kwargs
             def register_command(self,name,handler,**kwargs):self.commands[name]=(handler,kwargs)
         ctx=Context();plugin.register(ctx)
-        self.assertEqual(set(ctx.tools),{'delivery_shelf_register','delivery_shelf_search'})
+        self.assertEqual(set(ctx.tools),{'delivery_shelf_register','delivery_shelf_search','delivery_shelf_update','delivery_shelf_offer_update'})
         self.assertEqual(ctx.commands['shelf'][1]['argument_mode'],'text')
         result=json.loads(ctx.tools['delivery_shelf_register']['handler']({'title':'Tool delivery'}))
         self.assertTrue(result['ok'])
