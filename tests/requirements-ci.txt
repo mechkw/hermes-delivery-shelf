@@ -28,6 +28,8 @@ Pygments==2.21.0
 python-dateutil==3.0.0
 python-dotenv==1.2.4
 python-multipart==0.0.32
+# Official Hermes v0.22.5 PTB pin; offline Telegram tests need no webhook extra.
+python-telegram-bot==22.8
 PyYAML==6.0.3
 requests==2.34.2
 rich==15.0.0

@@ -267,10 +267,19 @@ def register(ctx):
             return result
         if text == "help":
             return ('/shelf — Telegram inline panel (when available); otherwise text list\n'
-                    '/shelf [query] — search saved deliveries\n'
-                    '/shelf add — request the most recent current-context artifacts\n'
-                    '/shelf add [title] [#tags] --file <root:path> [--description "text"]\n'
-                    'The agent fills missing title, tags and description, then confirms the saved details.')
+                    '/shelf <query> or /shelf search <query> — search saved deliveries\n'
+                    '/shelf add — request the most recent delivered artifact(s) in this conversation; same as panel Add\n'
+                    '/shelf add [title] [#tag1, tag2] --file <root:path> [--description "text"] — choose an explicit file\n'
+                    '/shelf help — show this syntax without saving\n'
+                    'Files must exist in an approved root; quote file references containing spaces. '
+                    'Bare Add never scans folders and asks if the intended artifact is unclear.\n'
+                    'The current agent fills only missing title, tags and description, then saves and verifies. '
+                    'Assisted saves require current session context and '
+                    'plugins.entries.delivery-shelf.allow_gateway_injection: true; queued is not saved. '
+                    'Supply all metadata with --file to save directly without a model turn.\n'
+                    'Telegram groups/topics: Add and missing-metadata handoffs are refused; use a private chat '
+                    'or supply all metadata with --file. Browsing and fully specified saves remain available. '
+                    'Native panels/Add also require the operator owner policy.')
         if text.split(maxsplit=1)[:1] == ["add"]:
             identity = controller.identity(source, session_id, session_key, platform) if source is not None and platform == 'telegram' else None
             return _add_command(ctx, text[3:].strip(), session_id=session_id, session_key=session_key, platform=platform,
@@ -287,4 +296,10 @@ def register(ctx):
         lines.extend(f"• {item['title']} [{item['kind']}] — {item['id']}" for item in data["items"])
         lines.append('Add: /shelf add [title] [#tags] --file <root:path> [--description "text"]\nUse Dashboard or Desktop to edit, preview or remove entries.')
         return "\n".join(lines)
-    ctx.register_command("shelf", command, description="Search your shelf or add an explicit file", args_hint="[query | add <title> #tags --file <root:path>]", argument_mode="text")
+    # Optional-leading hint keeps bare invocation eligible for the native Telegram menu.
+    # Keep description <=40 characters: the host truncates plugin menu descriptions.
+    ctx.register_command(
+        "shelf", command, description="Browse/add deliveries; /shelf help",
+        args_hint='[query | search <query> | add | add [title] [#tag1, tag2] --file <root:path> [--description "text"] | help]',
+        argument_mode="text",
+    )

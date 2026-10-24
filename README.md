@@ -126,6 +126,13 @@ Delivery Shelf is an independent community plugin, not a core fork. It contribut
 
 For us, Hermes is the best platform for turning agent work into something useful beyond a single chat. Delivery Shelf gives that work somewhere to land.
 
+## Command discovery
+
+`/shelf help` shows full syntax. Native Telegram menus use the plugin registry,
+but menu priority may be needed to survive the host cap. On official Hermes v0.22.5,
+global gateway `/help` and `/commands` omit plugin commands entirely; registering
+argument hints cannot fix that host gap. [Menu setup, syntax and verified limitations →](docs/COMMANDS.md)
+
 ## Go deeper
 
 - [Setup, approved file roots, remote hosts, and troubleshooting](docs/OPERATIONS.md)
