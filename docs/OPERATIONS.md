@@ -16,19 +16,41 @@ ID is **`delivery-shelf`**.
 
 If a Dashboard server was already running, restart that server so its Python backend
 can mount the new routes, then refresh the page. In Desktop, rescan through
-**Capabilities → Plugins** and check both Agent and Desktop enablement. The current
-Hermes installer manages the unified package; you do not need to compile JavaScript.
+**Capabilities → Plugins** and check both Agent and Desktop enablement, then open
+**Saved → Deliverables**. For a remote backend, use the native Git installer below;
+Rescan alone does not install the local UI. You do not need to compile JavaScript.
 
 ## Remote Desktop setups
 
 A Desktop app and its connected backend can run on different computers. Installing
 backend Python code on a server does not automatically put a UI on your laptop.
 
-1. Install and enable the plugin on the backend that owns the catalog and files.
-2. Install the same package on the computer running Desktop, so its Desktop half
-   is available to the app. Rescan plugins there.
-3. Connect Desktop to the intended backend and profile.
-4. Open Delivery Shelf and verify that the displayed profile is the one you intended.
+1. In the **native Desktop app**, connect to the intended backend and profile.
+2. Open **Capabilities → Plugins → Install from Git** and enter
+   `https://github.com/mechkw/hermes-delivery-shelf`. The native installer installs the
+   Desktop UI locally and the Agent half on the selected backend, subject to normal
+   consent. No JavaScript compilation is required.
+3. Verify both **Desktop** and **Agent** switches are enabled, then open
+   **Saved → Deliverables** and check the displayed profile.
+
+If the backend was installed first, **“unavailable (remote backend)”** means the
+paired local Desktop half is missing. Rescan alone cannot copy files from the
+remote server. Use the native Git installer above; do not copy a bare `plugin.js`,
+which lacks the installer's package-pairing metadata.
+
+Some Hermes builds report **“already installed”** for the Agent half while still
+installing the local Desktop half. Inspect both switches afterward: the Desktop
+half may need to be enabled explicitly. Do not force-reinstall or uninstall a
+working backend just to clear this message. If the local half remains absent,
+retain the installer error for diagnosis rather than treating the install as done.
+
+### Browser-hosted Desktop versus Dashboard
+
+The currently inspected browser-hosted Desktop bridge lacks external Desktop
+plugin loading and installation. It is not the separately supported web Dashboard.
+Use native Desktop or the authenticated Dashboard for this plugin's Saved panel;
+installing the backend alone does not add that panel to browser-hosted Desktop.
+No additional public port or unauthenticated endpoint is needed.
 
 The Dashboard runs beside its backend, so its UI and backend package share the same
 installation. A responsive Dashboard page is the mobile view; this project does not

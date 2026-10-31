@@ -21,16 +21,37 @@ No background folder sweeps. No second cloud account. Your existing Hermes agent
 
 ## Quick start
 
-Install the plugin in the Hermes environment that owns your files:
+### Native Hermes Desktop
+
+In the installed app, open **Capabilities → Plugins → Install from Git** and enter:
+
+```text
+https://github.com/mechkw/hermes-delivery-shelf
+```
+
+Select the intended backend/profile, review the normal installation consent, and
+verify that **both Agent and Desktop are enabled**. Open **Saved → Deliverables**.
+The Desktop UI lives on the app computer; the Agent half and data live on the
+selected backend. A server-only install followed by Rescan is not enough for a
+remote client. [Existing backend or “unavailable (remote backend)”? →](docs/OPERATIONS.md#remote-desktop-setups)
+
+### Web Dashboard or backend-only installation
+
+Run on the backend that owns your data:
 
 ```sh
 hermes plugins install mechkw/hermes-delivery-shelf --enable
 hermes plugins list
 ```
 
-- **Dashboard:** restart its server if it was already running, refresh, and open **Delivery Shelf**.
-- **Desktop:** rescan plugins in **Capabilities → Plugins**, check the Agent and Desktop halves are enabled, and open **Delivery Shelf**.
-- **Phone or tablet:** use your existing authenticated web Dashboard. The shelf adapts to the smaller screen; there is no separate mobile app.
+Refresh the authenticated **Dashboard** after its plugin routes are loaded; if
+needed, restart only that Dashboard server. Open **Saved → Deliverables**. The
+Dashboard also adapts to phones and tablets; no separate mobile app is required.
+
+**Browser-hosted Desktop is a different host from the web Dashboard.** The
+currently inspected Hermes browser bridge does not load these external Desktop
+plugins. Use native Desktop or the Dashboard for the Saved panel; backend tools
+can still work without that panel.
 
 Start with a simple request:
 

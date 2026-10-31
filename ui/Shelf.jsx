@@ -1,39 +1,32 @@
 import React, {useEffect, useRef, useState, useId} from 'react';
 import styles from './style.css';
+import {useCollectionFocus} from './collection-focus.js';
+import {Button,Input,Textarea,SearchField,Choice,Field,Dialog,DialogFooter,EmptyState,ErrorState,Loader} from '@saved/presentation';
 
 const kinds = ['document', 'image', 'report', 'code', 'other'];
 const fresh = () => ({title:'',description:'',kind:'document',project:'',tags:[],file:null,session_id:''});
 const message = error => typeof error?.message === 'string' ? error.message : 'The request failed. Try again.';
 
-function Dialog({title, children, close}) {
-  const ref = useRef(null), id = useId();
-  useEffect(() => { const node=ref.current; node.showModal(); node.querySelector('[data-initial-focus]')?.focus(); return () => node.close(); }, []);
-  return <dialog ref={ref} className="ds-dialog ds" aria-labelledby={id} onCancel={e=>{e.preventDefault();close();}}>
-    <div className="ds-dialog-head"><h2 id={id}>{title}</h2><button type="button" aria-label="Close dialog" onClick={close}>×</button></div>
-    {children}
-  </dialog>;
-}
-
-function Editor({entry, roots, busy, error, save, close}) {
+function Editor({entry, roots, busy, error, save, close, restoreFocus}) {
   const [draft,setDraft]=useState(entry || fresh()), [tags,setTags]=useState((entry?.tags||[]).join('\n'));
   const [root,setRoot]=useState(entry?.file?.root||roots[0]||''), [path,setPath]=useState(entry?.file?.path||'');
   const change=(key,value)=>setDraft(d=>({...d,[key]:value}));
-  return <Dialog title={entry ? 'Edit delivery' : 'Add a delivery'} close={()=>{if(!busy)close();}}>
+  return <Dialog restoreFocus={restoreFocus} busy={busy} title={entry ? 'Edit delivery' : 'Add a delivery'} close={()=>{if(!busy)close();}}>
     <form onSubmit={e=>{e.preventDefault();save({...draft,tags:tags.split('\n').map(t=>t.trim()).filter(Boolean),file:path.trim()?{root,path:path.trim()}:null});}}>
-      <p className="ds-muted">Save only the work you choose. Files stay where they are.</p>
-      <label>Title<input data-initial-focus required maxLength={160} value={draft.title} onChange={e=>change('title',e.target.value)}/></label>
-      <label>Description<textarea rows={3} maxLength={4000} value={draft.description} onChange={e=>change('description',e.target.value)}/></label>
-      <div className="ds-two"><label>Kind<select value={draft.kind} onChange={e=>change('kind',e.target.value)}>{kinds.map(k=><option key={k}>{k}</option>)}</select></label>
-      <label>Project<input maxLength={100} value={draft.project} onChange={e=>change('project',e.target.value)}/></label></div>
-      <label>Session reference <span className="ds-muted">optional; not verified provenance</span><input maxLength={160} pattern="[A-Za-z0-9_.:\-]*" value={draft.session_id||''} onChange={e=>change('session_id',e.target.value)}/></label>
-      <label>Tags (one per line)<textarea aria-label="Tags (one per line)" rows={3} value={tags} maxLength={820} onChange={e=>setTags(e.target.value)}/></label>
+      <fieldset disabled={busy} className="hs-form-fields"><p className="ds-muted">Save only the work you choose. Files stay where they are.</p>
+      <Field>Title<Input data-initial-focus required maxLength={160} value={draft.title} onChange={e=>change('title',e.target.value)}/></Field>
+      <Field>Description<Textarea rows={3} maxLength={4000} value={draft.description} onChange={e=>change('description',e.target.value)}/></Field>
+      <div className="ds-two"><Field>Kind<Choice value={draft.kind} onChange={e=>change('kind',e.target.value)}>{kinds.map(k=><option key={k}>{k}</option>)}</Choice></Field>
+      <Field>Project<Input maxLength={100} value={draft.project} onChange={e=>change('project',e.target.value)}/></Field></div>
+      <Field>Session reference <span className="ds-muted">optional; not verified provenance</span><Input maxLength={160} pattern="[A-Za-z0-9_.:\-]*" value={draft.session_id||''} onChange={e=>change('session_id',e.target.value)}/></Field>
+      <Field>Tags (one per line)<Textarea aria-label="Tags (one per line)" rows={3} value={tags} maxLength={820} onChange={e=>setTags(e.target.value)}/></Field>
       <fieldset><legend>Optional registered file</legend><p className="ds-muted">Approved roots only. Text, PDF and raster images; up to 10 MiB. Hidden files, sensitive names, symlinks and hard links are refused.</p>
-        <label>Approved root<select value={root} onChange={e=>setRoot(e.target.value)}><option value="" disabled>Select root</option>{roots.map(r=><option key={r}>{r}</option>)}</select></label>
-        <label>Relative file path<input value={path} maxLength={1024} onChange={e=>setPath(e.target.value)} placeholder="project/final-report.pdf"/></label>
+        <Field>Approved root<Choice value={root} onChange={e=>setRoot(e.target.value)}><option value="" disabled>Select root</option>{roots.map(r=><option key={r}>{r}</option>)}</Choice></Field>
+        <Field>Relative file path<Input value={path} maxLength={1024} onChange={e=>setPath(e.target.value)} placeholder="project/final-report.pdf"/></Field>
         <small>Leave the path empty for metadata only. A path is not an upload.</small>
       </fieldset>
-      {error && <p role="alert" className="ds-error">{error}</p>}
-      <div className="ds-actions"><button type="button" disabled={busy} onClick={close}>Cancel</button><button className="ds-primary" disabled={busy} type="submit">{busy?'Saving…':entry?'Save changes':'Add delivery'}</button></div>
+      </fieldset>{error && <ErrorState title="Action failed" description={error}/>}
+      <div className="ds-actions"><Button type="button" disabled={busy} onClick={close}>Cancel</Button><Button variant="default" loading={busy} disabled={busy} type="submit">{entry?'Save changes':'Add delivery'}</Button></div>
     </form>
   </Dialog>;
 }
@@ -43,6 +36,7 @@ export function Shelf({api,embedded=false}) {
   const [filters,setFilters]=useState({q:'',tag:'',kind:'',project:''}), [offset,setOffset]=useState(0), [refresh,setRefresh]=useState(0);
   const [editor,setEditor]=useState(undefined), [selected,setSelected]=useState(null), [removing,setRemoving]=useState(null);
   const [busy,setBusy]=useState(false), [actionError,setActionError]=useState(''), [notice,setNotice]=useState(''), [preview,setPreview]=useState(null);
+ const focus=useCollectionFocus(editor!==undefined||Boolean(selected||removing));
   const alive=useRef(false), serial=useRef(0), fileSerial=useRef(0);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;serial.current++;fileSerial.current++;};},[]);
   useEffect(()=>{
@@ -96,37 +90,37 @@ export function Shelf({api,embedded=false}) {
     }catch(e){if(alive.current && ticket===fileSerial.current)setActionError(message(e));}
     finally{if(alive.current)setBusy(false);}
   }
-  return <section className="ds ds-shelf">
+  return <section ref={focus.ref} onClickCapture={focus.capture} className="ds ds-shelf">
     <style>{styles}</style>
-    <header className="ds-header"><div><p className="ds-eyebrow">COLLECTED WORK <span> / {status?.profile||'your profile'}</span></p>{embedded?<h2>Deliverables</h2>:<h1>Delivery Shelf<span aria-hidden="true">.</span></h1>}<p className="ds-subtitle">The work worth keeping, right at hand.</p></div>
-      <button className="ds-primary" disabled={!status} onClick={()=>{close();setEditor(null);}}>＋ Add delivery</button></header>
+    <header className="ds-header"><div><p className="ds-muted">{status?.profile||'Your profile'}</p><h2>Deliverables</h2><p className="ds-subtitle">Files and finished work you chose to keep.</p></div>
+      <Button data-dialog-trigger data-collection-fallback variant="default" disabled={!status||busy} onClick={()=>{close();setEditor(null);}}>Add delivery</Button></header>
     <section aria-label="Filter deliveries" className="ds-filters">
-      <label className="ds-search">Search<input type="search" placeholder="Find a title or description…" maxLength={200} value={filters.q} onChange={e=>filter('q',e.target.value)}/></label>
-      <label>Kind<select value={filters.kind} onChange={e=>filter('kind',e.target.value)}><option value="">All kinds</option>{kinds.map(k=><option key={k}>{k}</option>)}</select></label>
-      <label>Project<input placeholder="Exact project" maxLength={100} value={filters.project} onChange={e=>filter('project',e.target.value)}/></label>
-      <label>Tag<input placeholder="Exact tag" maxLength={40} value={filters.tag} onChange={e=>filter('tag',e.target.value)}/></label>
+      <Field className="ds-search">Search<SearchField aria-label="Search deliveries" placeholder="Find a title or description…" value={filters.q} onChange={value=>filter('q',value.slice(0,200))}/></Field>
+      <Field>Kind<Choice value={filters.kind} onChange={e=>filter('kind',e.target.value)}><option value="">All kinds</option>{kinds.map(k=><option key={k}>{k}</option>)}</Choice></Field>
+      <Field>Project<Input placeholder="Exact project" maxLength={100} value={filters.project} onChange={e=>filter('project',e.target.value)}/></Field>
+      <Field>Tag<Input placeholder="Exact tag" maxLength={40} value={filters.tag} onChange={e=>filter('tag',e.target.value)}/></Field>
     </section>
-    <div className="ds-toolbar"><span aria-live="polite">{loading?'Loading your shelf…':`${data.total} ${data.total===1?'delivery':'deliveries'}`}</span><div><button onClick={()=>{setFilters({q:'',tag:'',kind:'',project:''});setOffset(0);}}>Clear filters</button><button onClick={()=>setRefresh(n=>n+1)}>Refresh</button></div></div>
+    <div className="ds-toolbar"><span aria-live="polite">{loading?'Loading your shelf…':`${data.total} ${data.total===1?'delivery':'deliveries'}`}</span><div><Button onClick={()=>{setFilters({q:'',tag:'',kind:'',project:''});setOffset(0);}}>Clear filters</Button><Button onClick={()=>setRefresh(n=>n+1)}>Refresh</Button></div></div>
     {notice && <p role="status" className="ds-notice">{notice}</p>}
-    {error ? <section className="ds-empty" role="alert"><h2>Could not open your shelf</h2><p>{error}</p><button onClick={()=>setRefresh(n=>n+1)}>Try again</button></section>:
-      loading ? <div className="ds-empty" role="status"><div className="ds-loader" aria-hidden="true"/><p>Loading registered deliveries…</p></div>:
-      !data.items.length ? <section className="ds-empty"><span className="ds-shelf-mark" aria-hidden="true">▥</span><h2>{Object.values(filters).some(Boolean)?'No matching deliveries':'Make room for finished work'}</h2><p>{Object.values(filters).some(Boolean)?'Try another search or clear the filters.':'Add a report, design, document or other deliverable. Nothing is collected automatically.'}</p>{!Object.values(filters).some(Boolean)&&<button className="ds-primary" onClick={()=>setEditor(null)}>Add your first delivery</button>}</section>:
+    {error ? <ErrorState title="Could not open your shelf" description={error}><Button onClick={()=>setRefresh(n=>n+1)}>Try again</Button></ErrorState>:
+      loading ? <Loader label="Loading deliveries"/>:
+      !data.items.length ? <section className="ds-empty"><EmptyState title={Object.values(filters).some(Boolean)?'No matching deliveries':'Keep finished work'} description={Object.values(filters).some(Boolean)?'Try another search or clear the filters.':'Add a report, design, document or other deliverable. Nothing is collected automatically.'}/>{!Object.values(filters).some(Boolean)&&<Button data-dialog-trigger variant="default" onClick={()=>setEditor(null)}>Add your first delivery</Button>}</section>:
       <section className="ds-grid" aria-label="Deliveries">{data.items.map(item=><article key={item.id} className="ds-card" data-kind={item.kind}>
         <div className="ds-card-top"><span className="ds-kind">{item.kind}</span><span className="ds-muted">{item.file?'File attached':'No attachment'}</span></div>
-        <h2><button onClick={()=>{close();setSelected(item);}}>{item.title}</button></h2><p className="ds-description">{item.description||'No description added.'}</p>
-        <div className="ds-tags">{item.tags.map(t=><button key={t} onClick={()=>filter('tag',t)} aria-label={`Filter tag ${t}`}>#{t}</button>)}</div>
+        <h2><Button data-dialog-trigger className="ds-card-title" variant="text" disabled={busy} onClick={()=>{close();setSelected(item);}}><span>{item.title}</span></Button></h2><p className="ds-description">{item.description||'No description added.'}</p>
+        <div className="ds-tags">{item.tags.map(t=><Button variant="chip" key={t} onClick={()=>filter('tag',t)} aria-label={`Filter tag ${t}`}>#{t}</Button>)}</div>
         <footer><span>{item.project||'No project'}</span><time dateTime={new Date(item.updated*1000).toISOString()}>{new Date(item.updated*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})}</time></footer>
       </article>)}</section>}
-    {!loading && data.total>30 && <nav className="ds-pagination" aria-label="Delivery pages"><button disabled={offset===0} onClick={()=>setOffset(n=>Math.max(0,n-30))}>Previous</button><span>{offset+1}–{Math.min(offset+30,data.total)} of {data.total}</span><button disabled={offset+30>=data.total} onClick={()=>setOffset(n=>n+30)}>Next</button></nav>}
+    {!loading && data.total>30 && <nav className="ds-pagination" aria-label="Delivery pages"><Button disabled={offset===0} onClick={()=>setOffset(n=>Math.max(0,n-30))}>Previous</Button><span>{offset+1}–{Math.min(offset+30,data.total)} of {data.total}</span><Button disabled={offset+30>=data.total} onClick={()=>setOffset(n=>n+30)}>Next</Button></nav>}
     <p className="ds-footnote">Local to this profile. Intentionally registered. Files never deleted.</p>
-    {editor!==undefined && <Editor entry={editor} roots={status?.roots||[]} busy={busy} error={actionError} save={save} close={close}/>}
-    {selected && <Dialog title={selected.title} close={()=>{if(!busy)close();}}><p className="ds-kind">{selected.kind}{selected.project && ` / ${selected.project}`}</p><p className="ds-detail-description">{selected.description||'No description added.'}</p><p>{selected.tags.map(t=>'#'+t).join(' · ')}</p>
-      {selected.session_id && <div className="ds-file"><label>Session reference (not verified provenance)<input readOnly value={selected.session_id} onFocus={e=>e.target.select()}/></label><button onClick={async()=>{try{await api.copyText(selected.session_id);if(alive.current)setNotice('Session reference copied.');}catch{if(alive.current)setActionError('Copy unavailable. Select the session reference and copy it manually.');}}}>Copy session ID</button></div>}
-      {selected.file && <div className="ds-file"><code>{selected.file.root} / {selected.file.path}</code><div className="ds-actions">{/\.(txt|md|csv)$/i.test(selected.file.path)&&<button disabled={busy} onClick={()=>readFile(selected,true)}>Preview text</button>}<button disabled={busy} onClick={()=>readFile(selected,false)}>Download file</button></div><small>Preview is plain text, never rendered HTML.</small></div>}
+    {editor!==undefined && <Editor restoreFocus={focus.restore} entry={editor} roots={status?.roots||[]} busy={busy} error={actionError} save={save} close={close}/>}
+    {selected && <Dialog restoreFocus={focus.restore} busy={busy} title={selected.title} close={()=>{if(!busy)close();}}><p className="ds-kind">{selected.kind}{selected.project && ` / ${selected.project}`}</p><p className="ds-detail-description">{selected.description||'No description added.'}</p><p>{selected.tags.map(t=>'#'+t).join(' · ')}</p>
+      {selected.session_id && <div className="ds-file"><Field>Session reference (not verified provenance)<Input readOnly value={selected.session_id} onFocus={e=>e.target.select()}/></Field><Button onClick={async()=>{try{await api.copyText(selected.session_id);if(alive.current)setNotice('Session reference copied.');}catch{if(alive.current)setActionError('Copy unavailable. Select the session reference and copy it manually.');}}}>Copy session ID</Button></div>}
+      {selected.file && <div className="ds-file"><code>{selected.file.root} / {selected.file.path}</code><div className="ds-actions">{/\.(txt|md|csv)$/i.test(selected.file.path)&&<Button disabled={busy} onClick={()=>readFile(selected,true)}>Preview text</Button>}<Button disabled={busy} onClick={()=>readFile(selected,false)}>Download file</Button></div><small>Preview is plain text, never rendered HTML.</small></div>}
       {busy&&<p role="status">Working…</p>}{preview&&<div><pre className="ds-preview">{preview.text}</pre>{preview.truncated&&<p>Preview limited to 64 KiB. Download for the complete file.</p>}</div>}
-      {actionError&&<p className="ds-error" role="alert">{actionError}</p>}
-      <div className="ds-actions"><button disabled={busy} onClick={()=>{const item=selected;close();setEditor(item);}}>Edit metadata</button><button className="ds-danger" disabled={busy} onClick={()=>{const item=selected;close();setRemoving(item);}}>Remove from shelf</button></div>
+      {actionError&&<ErrorState title="Action failed" description={actionError}/>}
+      <div className="ds-actions"><Button disabled={busy} onClick={()=>{const item=selected;close();setEditor(item);}}>Edit metadata</Button><Button variant="destructive" disabled={busy} onClick={()=>{const item=selected;close();setRemoving(item);}}>Remove from shelf</Button></div>
     </Dialog>}
-    {removing&&<Dialog title="Remove this delivery?" close={()=>{if(!busy)close();}}><p><strong>{removing.title}</strong> will be removed from this profile’s shelf.</p><p>Only metadata is removed. The original file will not be deleted.</p>{actionError&&<p role="alert" className="ds-error">{actionError}</p>}<div className="ds-actions"><button data-initial-focus disabled={busy} onClick={close}>Keep delivery</button><button className="ds-danger" disabled={busy} onClick={remove}>{busy?'Removing…':'Remove metadata'}</button></div></Dialog>}
+    {removing&&<Dialog restoreFocus={focus.restore} busy={busy} title="Remove this delivery?" close={()=>{if(!busy)close();}}><p><strong>{removing.title}</strong> will be removed from this profile’s shelf.</p><p>Only metadata is removed. The original file will not be deleted.</p>{actionError&&<ErrorState title="Action failed" description={actionError}/>}<div className="ds-actions"><Button data-initial-focus disabled={busy} onClick={close}>Keep delivery</Button><Button variant="destructive" disabled={busy} onClick={remove}>{busy?'Removing…':'Remove metadata'}</Button></div></Dialog>}
   </section>;
 }
