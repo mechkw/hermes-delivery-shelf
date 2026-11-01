@@ -23,8 +23,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_completed_add_then_explicit_metadata_request(self):
         t = self.t
-        await t.click(await t.panel())
-        first = json.loads(t.ctx.queued[-1][0].split('\n', 1)[1])['request_id']
+        await t.assisted_request()
+        first = json.loads(t.ctx.queued[-1][0].split('\n', 1)[1])['supplied']['request_id']
         with t.session():
             saved = json.loads(await asyncio.to_thread(t.ctx.tools['delivery_shelf_register'], {
                 'title': 'First Add', 'file': {'root':'workspaces', 'path':'new.md'},
@@ -67,10 +67,10 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry.origin.user_id, '18')
         identity = t.controller.identity(caller, entry.session_id, entry.session_key, 'telegram')
         self.assertIsNone(await t.controller.send(identity))
-        self.assertNotIn('Add', [row[0]['text'] for row in t.sent()[-1]['reply_markup']['inline_keyboard']])
-        await t.click(next(reversed(t.controller.panels)), chat=-100)
+        self.assertIn('Add', [row[0]['text'] for row in t.sent()[-1]['reply_markup']['inline_keyboard']])
+        await t.click(next(reversed(t.controller.panels)), '1', chat=-100)
         self.assertIn('Shelf · Details', t.edited()[-1]['text'])
-        for command in ('add', 'add Second --file workspaces:third.md'):
+        for command in ('add Second --file workspaces:third.md',):
             answer = await asyncio.to_thread(t.ctx.commands['shelf'], command, source=caller,
                 session_id=entry.session_id, session_key=entry.session_key, platform='telegram')
             self.assertIn('Nothing queued', answer)
@@ -161,8 +161,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_waiting_register_does_not_hold_controller_lock(self):
         t = self.t
-        await t.click(await t.panel())
-        request = json.loads(t.ctx.queued[-1][0].split('\n', 1)[1])['request_id']
+        await t.assisted_request()
+        request = json.loads(t.ctx.queued[-1][0].split('\n', 1)[1])['supplied']['request_id']
         another = await t.panel()
         with t.session():
             async with self.sqlite_wait() as entered:
@@ -233,8 +233,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_concurrent_register_claim_is_one_shot(self):
         t = self.t
-        await t.click(await t.panel())
-        request = json.loads(t.ctx.queued[-1][0].split('\n', 1)[1])['request_id']
+        await t.assisted_request()
+        request = json.loads(t.ctx.queued[-1][0].split('\n', 1)[1])['supplied']['request_id']
         args = {'title':'Concurrent', 'session_id':'fictional-session', 'request_id':request,
                 'file':{'root':'workspaces','path':'new.md'}}
         with t.session():

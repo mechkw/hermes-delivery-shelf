@@ -61,6 +61,20 @@ class ShelfTests(unittest.TestCase):
         path.write_bytes(content)
         return api.FileRef(root="workspaces", path=name)
 
+    def test_zip_is_advertised_downloadable_but_not_previewable(self):
+        content = b'PK\x03\x04opaque fixture, not an archive parser input'
+        with patch('zipfile.ZipFile', side_effect=AssertionError('No extraction')):
+            item = self.create(file=self.file('bundle.zip', content))
+            status = self.client.get(self.base + '/status').json()
+            self.assertEqual(status['file_types'], ['.csv', '.gif', '.jpeg', '.jpg', '.md', '.pdf', '.png', '.txt', '.webp', '.zip'])
+            self.assertEqual(status['max_file_bytes'], 10485760)
+            route = self.base + '/entries/' + item['id'] + '/file'
+            result = self.client.get(route)
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(base64.b64decode(result.json()['base64']), content)
+            self.assertEqual(result.json()['media_type'], 'application/octet-stream')
+            self.assertEqual(self.client.get(route + '?preview=true').status_code, 415)
+
     def test_api_preserves_tag_case_and_filters_old_and_new_spellings(self):
         app = FastAPI()
         app.include_router(api.router)

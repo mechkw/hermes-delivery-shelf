@@ -14,7 +14,7 @@ def prepare(home):
     home.mkdir(parents=True, exist_ok=True)
     package=home/'plugins/delivery-shelf'
     package.mkdir(parents=True)
-    for filename in ('plugin.yaml','__init__.py','telegram_shelf.py'):
+    for filename in ('plugin.yaml','__init__.py','telegram_shelf.py','recent_artifacts.py'):
         shutil.copy2(ROOT/filename,package/filename)
     for folder in ('dashboard','desktop'):
         shutil.copytree(ROOT/folder,package/folder,ignore=shutil.ignore_patterns('__pycache__'))

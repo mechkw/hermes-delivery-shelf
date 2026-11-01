@@ -29,8 +29,10 @@ spec.loader.exec_module(plugin)
 class Capture(BaseRequest):
     def __init__(self):
         self.calls = []
+        self.uploads = []
         self.serial = 100
         self.fail = set()
+        self.messages = {}
     @property
     def read_timeout(self): return 1
     async def initialize(self): pass
@@ -43,12 +45,24 @@ class Capture(BaseRequest):
             return 400, json.dumps({'ok': False, 'description': 'Fictional transport rejection'}).encode()
         if verb == 'getMe':
             result = {'id': 909, 'is_bot': True, 'first_name': 'Fixture', 'username': 'fixture_bot'}
+        elif verb == 'sendDocument':
+            self.uploads.append((verb, data, request_data.multipart_data))
+            self.serial += 1
+            result = {'message_id': self.serial, 'date': 1,
+                      'chat': {'id': data['chat_id'], 'type': 'supergroup' if int(data['chat_id']) < 0 else 'private'},
+                      'document': {'file_id': 'fixture', 'file_unique_id': 'fixture'}}
+            if data.get('message_thread_id'): result['message_thread_id'] = data['message_thread_id']
         elif verb in ('sendMessage', 'editMessageText'):
             self.serial += 1
             result = {'message_id': data.get('message_id', self.serial), 'date': 1,
                       'chat': {'id': data['chat_id'], 'type': 'private'}, 'text': data['text']}
             if data.get('message_thread_id'): result['message_thread_id'] = data['message_thread_id']
             if data.get('reply_markup'): result['reply_markup'] = data['reply_markup']
+            key = (data['chat_id'], result['message_id'])
+            if verb == 'editMessageText' and key in self.messages:
+                # Telegram's edit receipt retains the original forum topic.
+                result = {**self.messages[key], **result}
+            self.messages[key] = result
         else: result = True
         return 200, json.dumps({'ok': True, 'result': result}).encode()
 
@@ -139,11 +153,16 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
                                             {'id':self.entry['id'], 'file':{'root':'workspaces','path':path}})
         return json.loads(result)
 
-    async def test_group_panel_offers_browsing_not_unsupported_add(self):
+    async def assisted_request(self):
+        # Advanced explicit-file metadata completion retains its independent guard.
+        return await asyncio.to_thread(self.ctx.commands['shelf'], 'add --file workspaces:new.md',
+            source=self.source, session_id='fictional-session', session_key='telegram:17:9', platform='telegram')
+
+    async def test_group_panel_offers_direct_add(self):
         self.source.chat_id = '-100'
         await self.panel()
         labels = [row[0]['text'] for row in self.sent()[-1]['reply_markup']['inline_keyboard']]
-        self.assertNotIn('Add', labels)
+        self.assertIn('Add', labels)
         self.assertIn('Fictional report', labels)
 
     async def test_actual_markup_order_topic_details_and_paging(self):
@@ -159,20 +178,20 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(max(len(row[0].callback_data.encode()) for row in markup.inline_keyboard), 64)
         await self.click(token, '1')
         self.assertIn('Details', self.edited()[-1]['text'])
-        await self.click(token, '1')  # back
-        await self.click(token, '6')  # browse more
+        await self.click(token, data=next(r[0]['callback_data'] for r in self.edited()[-1]['reply_markup']['inline_keyboard']
+                                          if r[0]['text'] == 'Back to recent'))
+        await self.click(token, data=self.edited()[-1]['reply_markup']['inline_keyboard'][-1][0]['callback_data'])  # browse more
         self.assertIn('Previous', str(self.edited()[-1]['reply_markup']))
         self.assertNotIn('ReplyKeyboard', str(self.sent()))
 
     async def test_add_queue_register_search_readback_and_replay(self):
         token = await self.panel()
-        await self.click(token)
+        await self.assisted_request()
         self.assertEqual(self.store.search()['total'], 1)
-        self.assertIn('Nothing saved yet', self.edited()[-1]['text'])
         prompt, destination = self.ctx.queued[-1]
-        payload = json.loads(prompt.split('\n', 1)[1])
+        payload = json.loads(prompt.split('\n', 1)[1])['supplied']
         self.assertEqual(destination['session_key'], 'telegram:17:9')
-        self.assertIn('no filesystem scans', prompt)
+        self.assertIn('Do not scan folders', prompt)
         args = dict(title='Newest current-context artifact', file={'root':'workspaces','path':'new.md'},
                     session_id='fictional-session', request_id=payload['request_id'])
         with self.session():
@@ -200,8 +219,8 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reset_before_click_and_delayed_register_denied(self):
         token = await self.panel()
-        await self.click(token)
-        request = json.loads(self.ctx.queued[-1][0].split('\n',1)[1])['request_id']
+        await self.assisted_request()
+        request = json.loads(self.ctx.queued[-1][0].split('\n',1)[1])['supplied']['request_id']
         self.ctx.hooks['on_session_reset'](old_session_id='fictional-session', session_id='new-session')
         args = dict(title='Stale', session_id='fictional-session', request_id=request,
                     file={'root':'workspaces','path':'new.md'})
@@ -219,7 +238,7 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         self.ctx.accept = False
         token = await self.panel()
         await self.click(token)
-        self.assertIn('not saved', self.edited()[-1]['text'])
+        self.assertIn('normal chat', self.edited()[-1]['text'])
         self.assertEqual(self.controller.requests, {})
         self.policy.unlink()
         before = len(self.sent())
@@ -296,7 +315,7 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
     async def test_parallel_double_click_and_reset_during_ack(self):
         token = await self.panel()
         await asyncio.gather(self.click(token), self.click(token))
-        self.assertEqual(len(self.ctx.queued), 1)
+        self.assertEqual(len(self.ctx.queued), 0)
         token = await self.panel()
         original = self.capture.do_request
         async def reset_at_ack(url, method, **kwargs):
@@ -305,13 +324,13 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
             return await original(url, method, **kwargs)
         self.capture.do_request = reset_at_ack
         await self.click(token)
-        self.assertEqual(len(self.ctx.queued), 1)
+        self.assertEqual(len(self.ctx.queued), 0)
         self.assertEqual(self.controller.requests, {})
 
     async def test_profile_session_and_application_separation(self):
         token = await self.panel()
-        await self.click(token)
-        request = json.loads(self.ctx.queued[-1][0].split('\n', 1)[1])['request_id']
+        await self.assisted_request()
+        request = json.loads(self.ctx.queued[-1][0].split('\n', 1)[1])['supplied']['request_id']
         args = dict(title='Wrong scope', session_id='fictional-session', request_id=request,
                     file={'root':'workspaces','path':'new.md'})
         for changed in ({'session_key':'telegram:17:10'}, {'user_id':'18'}, {'chat_id':'18'},
@@ -376,7 +395,7 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         self.capture.fail.add('editMessageText')
         await self.click(token)
         self.assertEqual(self.store.get(self.entry['id'])['file']['path'], 'new.md')
-        self.assertTrue(self.controller.panels[token].consumed)
+        self.assertNotIn(token, self.controller.panels)  # ambiguous publication retires the panel
         # Transport failed after commit: no rollback claim, and double-click cannot commit again.
         await self.click(token)
         self.assertEqual(self.store.get(self.entry['id'])['revision'], 2)

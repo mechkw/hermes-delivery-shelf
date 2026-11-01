@@ -8,43 +8,37 @@ performed for this verification.
 ## What the user sees
 
 On an authorized Telegram connection, `/shelf` sends a short **Shelf · N saved**
-message with genuine attached `InlineKeyboardMarkup`: **Add** first in private chats,
-up to five recent entries (each opens details), and **Browse more** last. Group/topic
-panels omit Add because assisted Add cannot safely run there on this host. Browse edits that
-same message; it does not replace the user's typing keyboard. There are no file
-uploads or filesystem browsing controls.
+message with attached buttons: **Add**, up to five recent entries, and **Browse more**.
+The same controls work in private chats and groups/topics. Browse edits that message;
+it does not replace your typing keyboard. Select an entry and choose **Send file**
+to receive its attachment. Metadata-only entries say **No file attached**; missing
+or unsafe files say **File unavailable**.
 
-**Add** queues a request for the most recent delivered artifact or related set
-already identifiable in this conversation's context. It does not search folders,
-choose by modification time, retrieve another conversation, or copy transcripts.
-If the intended artifact is absent or ambiguous, the agent must ask a focused
-question. The panel says **Requested**, explicitly **nothing saved yet**. The
-agent calls `delivery_shelf_register` and then `delivery_shelf_search` for exact
-readback before confirming saved details. This is model-guided selection, not a
-deterministic artifact detector.
+**Add** and `/shelf add` save a recent file from this conversation without a model
+call or agent handoff. One eligible file saves immediately and is read back before
+confirmation. Several files in the newest delivery open a chooser with **Cancel**;
+nothing is saved until you choose. **View saved file** opens the saved entry and its
+Send file button. An already-registered root/path returns **Already saved** without
+changing the existing card or revision.
 
-`/shelf add` requests the same current-context workflow. The explicit override
-remains `/shelf add [title] [#tags] --file root:relative-path
-[--description "text"]`. Complete metadata saves directly; omitted metadata is
-filled by the existing agent. Ordinary query commands remain text searches.
+Optional `/shelf add My title #Tag-one, Tag-two --description "My description"`
+preserves those fields. Defaults are the filename as title, an image/document kind,
+and empty tags/description. No recent file found? Ask Hermes to save it in normal chat.
 
-Each native explicit-file metadata handoff gets a **fresh request token**, even
-after a successful bare Add. That token binds the selected file, supplied metadata,
-owner, profile and exact current session route/generation. The agent may fill only
-missing metadata. Earlier requests remain guarded for their related artifact sets;
-omitting a token is not a workaround, and a successful file claim cannot be replayed.
+Add recognizes explicit standalone `MEDIA:` local-file references in eligible
+assistant responses from the **active segment of this conversation**. It does not
+scan folders, infer files from links/prose, inspect another conversation, or follow
+compressed summaries/ancestor history. Older or compressed-away deliveries can need
+the normal-chat fallback. A source reference is not proof that Telegram previously
+received the file. See [exact source and safety limits](DETERMINISTIC_ADD.md).
 
-**Group-chat limitation on v0.22.5:** Add is omitted from group/topic panels; bare `/shelf add` or an
-explicit-file command missing metadata refuses **before queueing** in Telegram
-groups/topics. The refusal explains that the host cannot safely bind the clicking
-owner and suggests a private chat or supplying all metadata. Fully specified saves,
-browsing and Update registration / Keep current panels still work in groups.
-This conservative restriction also applies to groups configured for per-user sessions.
-Keyed host injection restores the session's original participant. Public `origin=`
-injection preserves identity on the classic path, but under the session authority it
-can return accepted and subsequently reject a different participant against the last
-committed source. There is no public prequeue acknowledgment pinning both owner and
-current generation. The plugin does not weaken owner/session guards to hide this gap.
+The advanced override `/shelf add [title] [#tags] --file root:relative-path
+[--description "text"]` remains separate. Complete metadata saves directly;
+omitted metadata is filled by the existing agent under explicit injection consent.
+Each such handoff gets a fresh token bound to its file, supplied fields, owner,
+profile and exact session. Only this **advanced missing-metadata handoff** is refused
+in groups/topics on v0.22.5; use a private chat or supply all metadata. Ordinary Add
+does not use injection and is not subject to that restriction.
 
 ## Operator setup (not applied automatically)
 
@@ -64,10 +58,10 @@ current generation. The plugin does not weaken owner/session guards to hide this
    display name, bot ID, chat ID, or wildcard. Missing, malformed, symlinked,
    oversized, or non-regular policy files deny native access. Maximum 50 IDs,
    4 KiB policy. Keep the policy private and writable only by the operator.
-4. For Add's agent handoff, explicitly enable
+4. Ordinary Add and file retrieval need **no injection permission**. Only if you
+   want advanced `--file` commands to generate missing metadata, explicitly enable
    `plugins.entries.delivery-shelf.allow_gateway_injection: true` in that profile.
-   This is separate from the owner policy and from existing gateway permissions.
-   The host rechecks injection consent; queuing is not proof of saving.
+   This is separate from owner policy; queuing is not proof of saving.
 5. Retain narrow `allowed-roots.json` policy. No button/tool expands roots.
 6. Start a fresh session to activate the registered tool and frozen prompt guidance.
    After updating native handler code, restart the owning gateway when authorized:
@@ -109,9 +103,55 @@ roots and isolation; do not borrow the adapter's private bot, rename factory key
 to bypass host deduplication, or patch handler tables. Test `/shelf` and a browse
 button in the intended topic after restart before claiming live restoration.
 Until upstream supports replacing/removing native factory registrations safely,
-repeat that activation check after plugin rediscovery. No new file-send button or
-`dl`/`r3` text commands are implemented by this repair; downloads remain in the
-existing Desktop/Dashboard surface.
+repeat that activation check after plugin rediscovery. File sending uses the same
+native Application and therefore depends on this activation boundary too.
+
+## Direct file retrieval (no model call)
+
+- Open `/shelf`, tap an entry, then **Send file**. The file arrives as a native
+  document attachment in the same chat/topic, not a server path.
+- `/shelf dl 1` or `/shelf download 1` sends item 1 of **your last displayed list**.
+  `/shelf search <query>` produces up to 20 numbered results; an inline page numbers
+  its own five results. Numbers are not recalculated against changing recent order.
+  Starting a new list disables the previous snapshot. Its replacement becomes
+  selectable only after a matching native send/edit acknowledgement; snapshots
+  expire after ten minutes. Concurrent list updates are refused rather than reordered.
+  After an uncertain list delivery, numbers stay disabled for that result context;
+  refresh to use unnumbered entry buttons → **Send file**, or use recent shortcuts.
+  Text-only fallback lists never authorize numbers because the host return path
+  has no send receipt.
+- `/shelf r3` directly attempts the three most recently updated **attached entries**.
+  Use `r1` through `r5`. Reference-only entries are excluded. A missing/unsafe file
+  counts as unavailable; it is not replaced with an older entry. Fewer attached
+  entries than requested are reported separately. No list selection is required.
+
+All retrieval paths are deterministic: no agent, tool handoff, gateway injection,
+transcript retrieval, or metadata writes. They work in authorized groups/topics
+without enabling agent-injection permission. Only the saved file field is used;
+description text is never interpreted as a path. Files remain live references.
+
+Each request revalidates owner, profile, current session, lifecycle, entry revision,
+root policy and file identity. File reads run off-loop through the approved descriptor
+opener into a bounded byte snapshot, rejecting changes during reading and before send
+authorization. No pathname is handed to PTB to reopen. Maximum 10 MiB per file,
+five sequential files / 50 MiB per batch. ZIP is opaque: never extracted or previewed.
+A change after the final authorization point cannot recall bytes already being sent.
+
+An in-flight per-owner/chat/topic lock rejects overlapping sends. A Send file action
+is single-use, including on ambiguous transport failure. Failed sends are never
+retried automatically or rerouted to the root chat; a batch stops after an uncertain
+POST and reports unattempted entries. Inspect the chat before explicitly requesting
+again. This is not durable exactly-once delivery across process restarts.
+
+Native-transport-unavailable or isolated hosts give a concise Desktop/Dashboard
+fallback; they do not silently invoke a model. Snapshot state is owner/chat/topic/
+profile/session scoped, bounded to 128 lists, and cleared on unload/reconnect/reset.
+Uncertainty fences are non-evicting for the controller lifetime; reconnecting does
+not silently restore an ambiguous mapping. Their bounded overflow disables numeric
+publication, not explicit entry-based retrieval.
+`tests/native_downloads.py` exercises the official loader, gateway dispatcher and
+real PTB forum updates with captured multipart bytes and rejecting inference/injection
+mocks. It does not send to live Telegram.
 
 ## Agent-driven derivative offers
 
@@ -150,14 +190,17 @@ shown on those surfaces.
 
 ## State and safety boundaries
 
-- Opaque random callback IDs contain no paths or executable instructions. Namespace:
+- Opaque panel IDs and fresh per-render action generations contain no paths or executable instructions. Namespace:
   `shelf:`. Actual choices are looked up in plugin-owned state, not interpreted from
   text. The controller checks owner, chat, topic, message, Application, connection
-  generation, owning profile, expiry and consumed/busy state.
+  generation, owning profile, expiry and consumed/busy state. Claiming an action
+  invalidates that keyboard; replacements are staged until matching acknowledgement.
+  Failed/cancelled edits retire the panel before attempting an error confirmation.
+  Send file retains its separate random, one-shot action ID format.
 - Topics and the inbound reply anchor are carried to PTB explicitly when supplied.
   An unexpected returned chat/topic disables the panel. No root-chat retry occurs.
-- Reset/delete hooks invalidate outstanding panels and Add requests. Add's backend
-  request guard also compares the expected session ID and route with the current
+- Reset/delete hooks invalidate outstanding panels, deterministic Add choices and
+  advanced handoff requests. The advanced handoff's backend request guard also compares the expected session ID and route with the current
   task-bound session context; stale/invented tokens, changed profiles or omitted
   tokens while a request is pending are denied. The legacy environment fallback is
   not used as native identity. Without the required host lifecycle/context surfaces,
@@ -178,7 +221,8 @@ shown on those surfaces.
   CAS still checks the offered revision in the transaction. A guarded registration's
   file claim is retained even after a commit/readback failure: inspect before retrying.
 - State is memory-only: ten-minute TTL, at most 128 panels, 128 requests and 128
-  dedupe keys per controller, at most 32 files per Add request. Expired/oldest entries
+  dedupe keys per controller, at most eight choices per deterministic Add delivery
+  or 32 files per advanced agent-handoff request. Expired/oldest entries
   are evicted on interaction. Unload/reconnect clears outstanding state; restart
   expires all buttons. No transcripts or approval files are persisted. A separate
   bounded set retains up to 128 retired session IDs for the controller lifetime, so
@@ -215,6 +259,12 @@ The implementation additionally uses public `bound_session_key()` to reject the
 accessor's legacy ambient-environment fallback. No private adapter APIs are used.
 The warning is not hidden; `native_contract.py` checks only that known warning and
 fails on any other warning. This remains a compatibility/catalog-review caveat.
+
+`tests/native_recent_add.py` separately exercises deterministic Add with injection
+permission false and rejecting LLM/injection facades, including its failed-edit and
+post-wait source guards. `tests/native_downloads.py` covers exact multipart bytes,
+unacknowledged numbered-list refusal and foreign-profile query denial. Add → View
+saved file uses the same guarded detail renderer as ordinary browsing.
 
 These tests do **not** establish live Telegram delivery, real client layout, actual
 forum/DM-topic acceptance by Telegram servers, model adherence to the new derivative

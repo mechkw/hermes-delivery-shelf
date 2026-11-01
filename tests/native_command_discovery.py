@@ -115,7 +115,7 @@ def main():
                 for part in (f'/{name} help', 'missing', 'current', '--description', 'groups', 'queued is not saved'):
                     assert part in reply, (name, part, reply)
                 if name == 'shelf':
-                    for part in ('/shelf add', '/shelf search <query>', '--file <root:path>', 'refused', 'panel Add'):
+                    for part in ('/shelf add', '/shelf search <query>', '--file <root:path>', 'without a model', 'chooser'):
                         assert part in reply, part
                 else:
                     assert 'shared' in reply and 'note' in reply

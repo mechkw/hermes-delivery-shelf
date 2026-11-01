@@ -5,6 +5,24 @@ this file is not a promise of future features.
 
 ## Unreleased
 
+- Telegram **Add** now saves a recent explicit file reference without a model or
+  injection permission, including groups/topics. Multiple files open a chooser;
+  exact-reference duplicates keep existing metadata. Lookup is active-segment-only;
+  unavailable or compressed-away deliveries use a normal-chat fallback.
+- Fixed premature numbered-result and Add-keyboard publication: mappings/actions
+  are staged until matching acknowledgements, overlapping list updates are refused,
+  stale action generations are never reused, and uncertain outcomes fail closed.
+- Fixed foreign-profile list metadata disclosure and post-wait Add source reads;
+  current profile/owner/session guards run before reads and after blocking work.
+
+- Added model-free Telegram **Send file**, numbered `/shelf dl` / `download`, and
+  bounded `r1`–`r5` recent-attachment delivery. Scoped expiring snapshots, revision
+  and file-identity rechecks, duplicate-click fences, and no automatic POST retries.
+- Added `.zip` as opaque download only, retaining the 10 MiB/root/link/name policy.
+  No unpacking, rendering, execution, scanning or reference-only auto-migration.
+- Verified native forum multipart bytes through official loader/dispatcher/PTB with
+  rejecting inference/injection mocks; no live Telegram delivery claimed.
+
 - Added concise native command-menu metadata and expanded non-saving command help,
   with real-loader/menu/help/lifecycle regression probes. Documented priority/cap
   setup and the v0.22.5 global `/help` and `/commands` omission of plugin commands;

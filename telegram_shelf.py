@@ -48,6 +48,13 @@ class Panel:
     offer: dict | None = None
     busy: bool = False
     consumed: bool = False
+    pending_items: list | None = None
+    pending_actions: dict = field(default_factory=dict)
+    action_generation: int = 0
+    delivery: object = None
+    candidates: list = field(default_factory=list)
+    supplied: dict = field(default_factory=dict)
+    cancelled: threading.Event = field(default_factory=threading.Event)
 
 
 class Controller:
@@ -60,6 +67,13 @@ class Controller:
         self.generation = 0
         self.alive = True
         self.panels, self.requests, self.seen = {}, {}, {}
+        self.download_busy = set()
+        self.snapshots = {}
+        # One list publication per result context. Never evict active leases:
+        # cancellation of to_thread does not stop the worker using its lease.
+        self.publications = {}
+        self.uncertain_publications = set()
+        self.publication_fenced = False
         self.epoch = 0
         self.retired_sessions = set()
         self.session_fenced = False
@@ -84,7 +98,7 @@ class Controller:
 
     def prune(self):
         now = time.monotonic()
-        for collection in (self.panels, self.requests, self.seen):
+        for collection in (self.panels, self.requests, self.seen, self.snapshots):
             for key, value in list(collection.items()):
                 expires = value.expires if isinstance(value, Panel) else value['expires']
                 if expires <= now:
@@ -98,6 +112,7 @@ class Controller:
             self.panels.clear()
             self.requests.clear()
             self.seen.clear()
+            self.snapshots.clear()
 
     def boundary(self, session_id=None, old_session_id=None, deleted_ids=None, reset=False, **kwargs):
         with self.lock:
@@ -112,7 +127,7 @@ class Controller:
             if reset and not old_session_id:
                 self.session_fenced = True  # Cannot prove which prior generation was retired.
                 ids = set()
-            for collection in (self.panels, self.requests):
+            for collection in (self.panels, self.requests, self.snapshots):
                 for key, value in list(collection.items()):
                     identity = value.identity if isinstance(value, Panel) else value['identity']
                     if not ids or identity['session_id'] in ids:
@@ -129,6 +144,7 @@ class Controller:
             self.requests.clear()
             self.seen.clear()
             self.application = application
+            self.snapshots.clear()
             self.loop = asyncio.get_running_loop()
             generation = self.generation
         async def callback(update, context):
@@ -152,9 +168,9 @@ class Controller:
                 bool(identity['session_id'] and identity['session_key']))
 
     def permitted(self, identity):
-        owners = self.owners()
+        owners, home = self.owners(), self.api.bound_home()
         with self.lock:
-            return self._permitted(identity, owners)
+            return home == self.home and self._permitted(identity, owners)
 
     def handoff_error(self, identity):
         if not self.permitted(identity):
@@ -217,58 +233,90 @@ class Controller:
                         raise ValueError('Use the current Shelf request_id')
         return run('register', args, authorize_commit=authorize_commit)
 
-    def keyboard(self, token, panel, offset=0, detail=None):
+    def _stage_keyboard(self, token, panel, text, buttons):
+        """Never reuse an action key or arm an unpublished replacement keyboard."""
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        actions, rows = {}, []
+        with self.lock:
+            panel.action_generation += 1
+            if panel.action_generation > 0xffffffffffffffff:
+                raise ValueError('Shelf panel exhausted; refresh it')
+            generation = panel.action_generation
+            actions, rows = {}, []
+            for index, (label, action) in enumerate(buttons):
+                key = (secrets.token_hex(4) if action[0] == 'download' else
+                       str(index) if generation == 1 else f'{generation:x}.{index:x}')
+                actions[key] = action
+                rows.append([InlineKeyboardButton(label, callback_data=f'shelf:{token}:{key}')])
+            panel.actions = {}
+            panel.pending_actions = actions
+        return text, InlineKeyboardMarkup(rows)
+
+
+    def keyboard(self, token, panel, offset=0, detail=None, query=None, numbered=True):
+        buttons = []
+        panel.pending_items = None
         def row(label, action):
-            key = str(len(actions))
-            actions[key] = action
-            rows.append([InlineKeyboardButton(label, callback_data=f'shelf:{token}:{key}')])
-        # This host cannot safely admit assisted Add from a shared group.
-        # Keep the text command's refusal, but do not offer a dead-end button.
-        if not panel.identity['chat'].startswith('-'):
-            row('Add', ('add', None))
+            buttons.append((label, action))
+        row('Add', ('add', None))
         if detail:
             entry = self.api.Store(self.home).get(detail)
             text = ('Shelf · Details\n' + entry['title'] + '\n' + entry['description'][:1800] +
-                    '\nTags: ' + ', '.join(entry['tags']) + '\nID: ' + entry['id'])
+                    '\nTags: ' + ', '.join(entry['tags']))
+            available = False
             if entry['file']:
-                text += '\nFile: ' + entry['file']['root'] + ':' + entry['file']['path']
+                try:
+                    with self.api.open_file(self.home, self.api.FileRef.model_validate(entry['file'])):
+                        available = True
+                except Exception:
+                    pass
+            if available:
+                row('Send file', ('download', (entry['id'], entry['revision'])))
+            else:
+                text += '\nFile unavailable.' if entry['file'] else '\nNo file attached.'
             row('Back to recent', ('page', 0))
         else:
-            data = self.api.Store(self.home).search(limit=PAGE, offset=offset)
-            text = f"Shelf · {data['total']} saved"
-            for entry in data['items']:
+            data = self.api.Store(self.home).search(q=query or '', limit=20 if query is not None else PAGE, offset=offset)
+            if not self._panel_current(token, panel):
+                raise ValueError('Shelf list no longer authorized')
+            text = (f"Delivery Shelf — {data['total']} matching deliveries" if query is not None
+                    else f"Shelf · {data['total']} saved")
+            if numbered:
+                panel.pending_items = [(e['id'], e['revision']) for e in data['items']]
+            for number, entry in enumerate(data['items'], 1):
+                text += ('\n' + (f'{number}. ' if numbered else '• ') + entry['title'][:100] +
+                         ('' if entry['file'] else ' · no file attached'))
                 row(entry['title'][:60], ('detail', entry['id']))
-            if offset:
+            text += ('\n/shelf dl <number> — send from this page (10 minutes)' if numbered else
+                     '\nNumbered downloads disabled after unconfirmed delivery. Select an entry → Send file; or use Desktop/Dashboard.')
+            if offset and query is None:
                 row('Previous', ('page', max(0, offset - PAGE)))
-            row('Browse more', ('page', offset + PAGE if offset + PAGE < data['total'] else 0))
-        panel.actions = actions
-        return text, InlineKeyboardMarkup(rows)
+            if query is None:
+                row('Browse more', ('page', offset + PAGE if offset + PAGE < data['total'] else 0))
+        return self._stage_keyboard(token, panel, text, buttons)
 
-    def _prepare_send(self, identity, offer, epoch):
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        owners = self.owners()
+    def _prepare_send(self, identity, offer, epoch, publication, query):
+        owners, home = self.owners(), self.api.bound_home()
         with self.lock:
             self.prune()
             if self.session_fenced:
                 return 'Shelf inline panels unavailable: session-generation guard exhausted or incomplete; restart the owning gateway before using panels.'
             if epoch is not None and epoch != self.epoch:
                 return 'Shelf session changed before delivery; request again.'
-            if not self._permitted(identity, owners) or self.application is None:
+            if (home != self.home or not self._permitted(identity, owners) or
+                    self.application is None or (not offer and not self._publication_current(publication))):
                 return 'Shelf inline panels unavailable: configure the Telegram owner policy and use an active session, or use explicit /shelf commands.'
             token = secrets.token_hex(12)
             panel = Panel(identity.copy(), self.generation, time.monotonic() + TTL, offer=offer)
             self.panels[token] = panel
+            if publication is not None:
+                publication['panel_token'] = token
             application = self.application
         if offer:
-            panel.actions = {'0': ('update', None), '1': ('keep', None)}
             text = 'Shelf · Update available\n' + offer['entry']['title'] + '\n' + offer['file']['path']
-            markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton('Update registration', callback_data=f'shelf:{token}:0')],
-                [InlineKeyboardButton('Keep current', callback_data=f'shelf:{token}:1')]])
+            text, markup = self._stage_keyboard(token, panel, text, [
+                ('Update registration', ('update', None)), ('Keep current', ('keep', None))])
         else:
-            text, markup = self.keyboard(token, panel)
+            text, markup = self.keyboard(token, panel, query=query, numbered=publication['numeric'])
         # Catalog/policy reads may have waited; do not revive a retired panel.
         if not self._panel_current(token, panel, epoch):
             return 'Shelf session changed before delivery; request again.'
@@ -282,42 +330,303 @@ class Controller:
                     panel.generation == self.generation and home == self.home and
                     self._permitted(panel.identity, owners))
 
-    def _finish_send(self, token, panel, message, epoch):
+    def _finish_send(self, token, panel, message, epoch, text, publication):
+        from telegram import Message
         current = self._panel_current(token, panel, epoch)
         with self.lock:
-            if not current or self.panels.get(token) is not panel:
+            if (not current or self.panels.get(token) is not panel or panel.generation != self.generation or
+                    panel.expires <= time.monotonic() or (epoch is not None and epoch != self.epoch) or
+                    (publication is not None and not self._publication_current(publication))):
                 self.panels.pop(token, None)
                 return 'Shelf panel expired during delivery; request again.'
-            if str(message.chat.id) != panel.identity['chat'] or str(message.message_thread_id or '') != panel.identity['thread']:
+            if (not isinstance(message, Message) or not message.is_accessible or
+                    str(message.chat.id) != panel.identity['chat'] or str(message.message_thread_id or '') != panel.identity['thread'] or
+                    not message.message_id or message.text != text):
                 self.panels.pop(token, None)
                 return 'Shelf transport returned an unexpected route; panel disabled.'
             panel.message = str(message.message_id)
+            panel.actions, panel.pending_actions = panel.pending_actions, {}
+            if publication is not None:
+                self._publish_results(publication, panel.pending_items)
+
+    def _finish_edit(self, token, panel, message, text, publication):
+        from telegram import Message
+        current = self._panel_current(token, panel)
+        with self.lock:
+            if (not current or self.panels.get(token) is not panel or
+                    panel.generation != self.generation or panel.expires <= time.monotonic() or
+                    not isinstance(message, Message) or not message.is_accessible or
+                    str(message.message_id) != panel.message or str(message.chat.id) != panel.identity['chat'] or
+                    str(message.message_thread_id or '') != panel.identity['thread'] or message.text != text or
+                    (publication is not None and not self._publication_current(publication))):
+                self.panels.pop(token, None)
+                return False
+            panel.actions, panel.pending_actions = panel.pending_actions, {}
+            if publication is not None:
+                self._publish_results(publication, panel.pending_items)
+            return True
 
     def _drop_panel(self, token):
         with self.lock:
             self.panels.pop(token, None)
 
-    async def send(self, identity, offer=None, epoch=None):
+    async def send(self, identity, offer=None, epoch=None, query=None):
         from telegram import ReplyParameters
-        prepared = await asyncio.to_thread(self._prepare_send, identity, offer, epoch)
-        if isinstance(prepared, str):
-            return prepared
-        token, panel, application, text, markup = prepared
-        kwargs = dict(chat_id=int(identity['chat']), text=text, reply_markup=markup, parse_mode=None)
-        if identity['thread']:
-            kwargs['message_thread_id'] = int(identity['thread'])
-        if identity['anchor'] and identity['anchor'].isdigit():
-            kwargs['reply_parameters'] = ReplyParameters(message_id=int(identity['anchor']), allow_sending_without_reply=False)
+        publication = None if offer else self._begin_publication(identity)
+        if not offer and publication is None:
+            return 'Shelf · List update in progress or numbered delivery unconfirmed. Use Send file, /shelf r1–r5, or Desktop/Dashboard.'
+        token = None
+        started = acknowledged = False
         try:
+            prepared = await asyncio.to_thread(self._prepare_send, identity, offer, epoch, publication, query)
+            if isinstance(prepared, str):
+                return prepared
+            token, panel, application, text, markup = prepared
+            kwargs = dict(chat_id=int(identity['chat']), text=text, reply_markup=markup, parse_mode=None)
+            if identity['thread']:
+                kwargs['message_thread_id'] = int(identity['thread'])
+            if identity['anchor'] and identity['anchor'].isdigit():
+                kwargs['reply_parameters'] = ReplyParameters(message_id=int(identity['anchor']), allow_sending_without_reply=False)
+            # Memory-only fence after the worker yields back to the loop.
+            if publication is not None and not self._publication_current(publication):
+                return 'Shelf · List expired. Open /shelf again.'
+            started = True
             message = await application.bot.send_message(**kwargs)
-            return await asyncio.to_thread(self._finish_send, token, panel, message, epoch)
-        except BaseException:
-            await asyncio.to_thread(self._drop_panel, token)
+            result = await asyncio.to_thread(self._finish_send, token, panel, message, epoch, text, publication)
+            acknowledged = result is None
+            return result
+        except BaseException as exc:
+            if token:
+                self._drop_panel(token)
+            if isinstance(exc, Exception):
+                return ('Shelf · List delivery unconfirmed. Numeric downloads disabled; check this chat. '
+                        'Use an entry’s Send file or Desktop/Dashboard.' if started else
+                        'Shelf · List unavailable or no longer authorized. Try /shelf again.')
             raise
+        finally:
+            if publication is not None:
+                self._end_publication(publication, acknowledged=acknowledged, uncertain=started and not acknowledged)
+
+    @staticmethod
+    def _snapshot_key(identity):
+        return tuple(identity[k] for k in ('profile', 'user', 'chat', 'thread', 'session_key', 'session_id'))
+
+    def _begin_publication(self, identity):
+        """Reserve before any await; overlapping list sends/edits are refused."""
+        with self.lock:
+            key = self._snapshot_key(identity)
+            if key in self.publications or len(self.publications) >= CAPACITY:
+                return None
+            publication = dict(key=key, epoch=self.epoch, generation=self.generation,
+                identity=identity.copy(), expires=time.monotonic() + TTL,
+                committed=False, numeric=not self.publication_fenced and key not in self.uncertain_publications)
+            self.publications[key] = publication
+            self.snapshots.pop(key, None)
+            return publication
+
+    def _publication_current(self, publication):
+        with self.lock:
+            return (publication is not None and self.alive and
+                    self.publications.get(publication['key']) is publication and
+                    publication['epoch'] == self.epoch and publication['generation'] == self.generation and
+                    publication['expires'] > time.monotonic())
+
+    def _publish_results(self, publication, items):
+        # Caller checked current owner/home/panel and matching transport receipt.
+        with self.lock:
+            if not self._publication_current(publication) or items is None:
+                return False
+            self.snapshots[publication['key']] = dict(identity=publication['identity'].copy(),
+                expires=publication['expires'], generation=self.generation, items=list(items))
+            publication['committed'] = True
+            return True
+
+    def _end_publication(self, publication, *, acknowledged=False, uncertain=False):
+        with self.lock:
+            key = publication['key']
+            if self.publications.get(key) is publication:
+                del self.publications[key]
+                if uncertain or not publication['committed']:
+                    self.snapshots.pop(key, None)
+                if not acknowledged and publication.get('panel_token'):
+                    self.panels.pop(publication['panel_token'], None)
+            if uncertain:
+                # An unacknowledged POST may arrive late. A later receipt cannot
+                # prove its ordering. Keep a bounded, non-evicting session fence.
+                if len(self.uncertain_publications) >= CAPACITY:
+                    self.publication_fenced = True
+                else:
+                    self.uncertain_publications.add(key)
+
+    def numbered_list(self, identity, query):
+        if self.api.bound_home() != self.home or not self.permitted(identity):
+            return 'Shelf · List unavailable or not authorized.'
+        epoch = self.epoch
+        if self.application is not None:
+            return self.send(identity, epoch=epoch, query=query)
+        # The host command contract returns text, not a send receipt. Never
+        # advertise or publish numbers from this unacknowledged fallback.
+        with self.lock:
+            self.snapshots.pop(self._snapshot_key(identity), None)
+        data = self.api.Store(self.home).search(q=query, limit=20)
+        if (self.api.bound_home() != self.home or not self.permitted(identity) or epoch != self.epoch):
+            return 'Shelf · List unavailable or not authorized.'
+        lines = [f"Delivery Shelf — {data['total']} matching deliveries"]
+        lines.extend(f"• {e['title']}" + ('' if e['file'] else ' · no file attached') for e in data['items'])
+        lines.append('Numbered downloads unavailable here. Download files in Desktop or Dashboard.')
+        lines.append('/shelf search <query> — find a saved delivery\n/shelf help — more options')
+        return '\n'.join(lines)
+
+    def select_number(self, identity, number):
+        owners, home = self.owners(), self.api.bound_home()
+        with self.lock:
+            self.prune()
+            snapshot = self.snapshots.get(self._snapshot_key(identity))
+            if (home != self.home or not self._permitted(identity, owners) or not snapshot or
+                    snapshot['generation'] != self.generation or not 1 <= number <= len(snapshot['items'])):
+                return None
+            return snapshot['items'][number - 1], snapshot
+
+    async def download_recent(self, identity, number):
+        epoch = self.epoch
+        if not await asyncio.to_thread(self.permitted, identity):
+            return 'Shelf · File sending unavailable or not authorized.'
+        try:
+            entries = await asyncio.to_thread(lambda: self.api.Store(self.home).recent_attached(number))
+        except Exception:
+            return 'Shelf · List unavailable. Try /shelf again.'
+        if not entries:
+            return 'Shelf · No attached files saved. Open /shelf to browse.'
+        result = await self.download(identity, [(e['id'], e['revision']) for e in entries], expected_epoch=epoch)
+        if len(entries) < number:
+            result += f' {number - len(entries)} fewer attached deliveries than requested.'
+        return result
+
+    async def download_number(self, identity, number):
+        epoch = self.epoch
+        if self.application is None:
+            return 'Shelf · File sending unavailable here. Download in Desktop or Dashboard.'
+        selected = await asyncio.to_thread(self.select_number, identity, number)
+        if selected is None:
+            return 'Shelf · No current numbered result. Open /shelf, then use /shelf dl <number>.'
+        selection, snapshot = selected
+        return await self.download(identity, [selection], expected_epoch=epoch, snapshot=snapshot)
+
+    @staticmethod
+    def _fingerprint(meta):
+        return (meta.st_dev, meta.st_ino, meta.st_size, meta.st_mtime_ns,
+                meta.st_ctime_ns, meta.st_nlink, meta.st_mode)
+
+    def _file_snapshot(self, selection):
+        """Bounded worker-only read; archives are opaque, never interpreted."""
+        entry_id, revision = selection
+        entry = self.api.Store(self.home).get(entry_id)
+        if entry['revision'] != revision:
+            raise ValueError('changed')
+        if not entry['file']:
+            raise ValueError('unavailable')
+        ref = self.api.FileRef.model_validate(entry['file'])
+        with self.api.open_file(self.home, ref) as stream:
+            before = self._fingerprint(os.fstat(stream.fileno()))
+            content = stream.read(self.api.MAX_FILE + 1)
+            after = self._fingerprint(os.fstat(stream.fileno()))
+        if before != after or len(content) != after[2] or len(content) > self.api.MAX_FILE:
+            raise ValueError('changed')
+        return entry, ref, after, content
+
+    def _download_authorized(self, identity, selection, ref, fingerprint, epoch, application, panel_token, panel, snapshot):
+        # Re-read revision and root policy, and verify the same inode still names
+        # the bounded bytes. This is the send authorization point, not a long DB lock.
+        entry = self.api.Store(self.home).get(selection[0])
+        if entry['revision'] != selection[1] or entry['file'] != ref.model_dump():
+            return False
+        with self.api.open_file(self.home, ref) as stream:
+            if self._fingerprint(os.fstat(stream.fileno())) != fingerprint:
+                return False
+        owners, home = self.owners(), self.api.bound_home()
+        with self.lock:
+            return (home == self.home and epoch == self.epoch and application is self.application and
+                    (snapshot is None or (self.snapshots.get(self._snapshot_key(identity)) is snapshot and
+                     snapshot['expires'] > time.monotonic() and snapshot['generation'] == self.generation)) and
+                    self._permitted(identity, owners) and (panel is None or
+                    (self.panels.get(panel_token) is panel and panel.expires > time.monotonic() and
+                     panel.busy and panel.generation == self.generation)))
+
+    async def download(self, identity, selections, *, panel_token=None, panel=None, expected_epoch=None, snapshot=None):
+        """Native attachments only: no tools, agents, injection, or automatic retry."""
+        route = tuple(identity[k] for k in ('profile', 'user', 'chat', 'thread'))
+        with self.lock:
+            if expected_epoch is not None and expected_epoch != self.epoch:
+                return 'Shelf · Session changed. Open /shelf again.'
+            if route in self.download_busy:
+                return 'Shelf · A file send is already in progress.'
+            if self.application is None:
+                return 'Shelf · File sending unavailable here. Download in Desktop or Dashboard.'
+            self.download_busy.add(route)
+            epoch, application = self.epoch, self.application
+        sent = unavailable = uncertain = 0
+        try:
+            for selection in selections[:5]:
+                content = None
+                try:
+                    if not await asyncio.to_thread(self.permitted, identity):
+                        unavailable += 1
+                        continue
+                    entry, ref, fingerprint, content = await asyncio.to_thread(self._file_snapshot, selection)
+                    valid = await asyncio.to_thread(self._download_authorized, identity, selection, ref, fingerprint,
+                                                    epoch, application, panel_token, panel, snapshot)
+                    # No await between this lifecycle fence and entering native transport.
+                    with self.lock:
+                        valid = (valid and self.alive and epoch == self.epoch and application is self.application and
+                                 (snapshot is None or (self.snapshots.get(self._snapshot_key(identity)) is snapshot and
+                                  snapshot['expires'] > time.monotonic() and snapshot['generation'] == self.generation)) and
+                                 (panel is None or (self.panels.get(panel_token) is panel and panel.busy and
+                                  panel.expires > time.monotonic() and panel.generation == self.generation)))
+                    if not valid:
+                        unavailable += 1
+                        del content
+                        continue
+                    from telegram import InputFile
+                    kwargs = dict(chat_id=int(identity['chat']),
+                                  document=InputFile(content, filename=ref.path.rsplit('/', 1)[-1]),
+                                  disable_content_type_detection=True)
+                    if identity['thread']:
+                        kwargs['message_thread_id'] = int(identity['thread'])
+                    # At most one bounded file resident; maximum batch wire payload 50 MiB.
+                    del content
+                except Exception:
+                    content = None
+                    unavailable += 1
+                    continue
+                try:
+                    message = await application.bot.send_document(**kwargs)
+                    if (str(message.chat.id) != identity['chat'] or
+                            str(message.message_thread_id or '') != identity['thread']):
+                        raise ValueError('Unexpected route receipt')
+                    sent += 1
+                except Exception:
+                    uncertain += 1
+                    # A failed POST may already have arrived. Never retry it or
+                    # continue a batch after an ambiguous transport outcome.
+                    break
+                finally:
+                    del kwargs
+            if uncertain:
+                remaining = len(selections) - sent - unavailable - uncertain
+                return (f'Shelf · {sent} sent; {unavailable} unavailable; {remaining} not attempted. '
+                        'Delivery of one file unconfirmed. Check this chat before requesting again.')
+            if sent == 1 and len(selections) == 1:
+                return 'Shelf · File sent.'
+            if not sent and len(selections) == 1:
+                return 'Shelf · File unavailable or changed. Open /shelf and select it again.'
+            return f'Shelf · {sent} sent; {unavailable} unavailable.'
+        finally:
+            with self.lock:
+                self.download_busy.discard(route)
 
     def _claim(self, query, application, generation):
         from telegram import Message
-        match = re.fullmatch(r'shelf:([a-f0-9]{24}):([0-9]{1,2})', query.data if isinstance(query.data, str) else '')
+        match = re.fullmatch(r'shelf:([a-f0-9]{24}):([0-9]{1,2}|[a-f0-9]{8}|[a-f0-9]{1,16}\.[a-f0-9]{1,2})', query.data if isinstance(query.data, str) else '')
         message, owners, home = query.message, self.owners(), self.api.bound_home()
         with self.lock:
             self.prune()
@@ -331,40 +640,170 @@ class Controller:
                      not panel.busy and not panel.consumed and match[2] in panel.actions)
             if valid and panel is not None and match is not None:
                 panel.busy = True
-                return match[1], panel, panel.actions[match[2]]
+                action = panel.actions[match[2]]
+                panel.actions, panel.pending_actions = {}, {}
+                return match[1], panel, action
         return None
 
-    def _authorize_panel_commit(self, token, panel, *, request=False):
+    def _authorize_panel_commit(self, token, panel, *, request=False, claim=True):
         owners, home = self.owners(), self.api.bound_home()
         with self.lock:
             if (self.panels.get(token) is not panel or panel.expires <= time.monotonic() or
                     panel.generation != self.generation or home != self.home or
-                    not self._permitted(panel.identity, owners) or not panel.busy or panel.consumed):
+                    not self._permitted(panel.identity, owners) or not panel.busy or panel.consumed or panel.cancelled.is_set()):
                 raise ValueError('Shelf action expired or session changed')
             # Atomic lifecycle/one-shot claim, AFTER write-lock and policy waits.
             # Once authorized, a commit may finish after reset; never pretend rollback.
-            panel.consumed = True
+            if claim:
+                panel.consumed = True
             if request:
                 return self.new_request(panel.identity)
 
-    def _perform(self, token, panel, action, value):
+    def _load_recent(self, panel):
+        from .recent_artifacts import recent, candidates, metadata, MISSING
+        delivery = recent(self.home, self.profile, panel.identity['session_id'])
+        if delivery is None:
+            raise ValueError(MISSING)
+        refs = candidates(self.api, self.home, delivery)
+        # Validate explicit fields before offering or committing any choice.
+        for ref in refs:
+            metadata(self.api, ref, panel.identity['session_id'], panel.supplied)
+        panel.delivery, panel.candidates = delivery, refs
+
+
+    def _choose_recent(self, token, panel):
+        from pathlib import Path
+        names = [Path(ref['path']).name for ref in panel.candidates]
+        labels = [ref['path'] if names.count(names[i]) > 1 else names[i]
+                  for i, ref in enumerate(panel.candidates)]
+        # Number long/colliding labels so truncation cannot make choices identical.
+        labels = [label if len(label) <= 60 and labels.count(label) == 1 else f'{i+1}. …{label[-53:]}'
+                  for i, label in enumerate(labels)]
+        return self._stage_keyboard(token, panel, 'Shelf · Choose a file to save',
+            [(label, ('save_recent', i)) for i, label in enumerate(labels)] +
+            [('Cancel', ('cancel_recent', -1))])
+
+
+    def _save_recent(self, token, panel, index):
+        from .recent_artifacts import recent, candidates, metadata
+        ref = panel.candidates[index]
+        entry = metadata(self.api, ref, panel.identity['session_id'], panel.supplied)
+        def authorize():
+            # Called after the catalog write reservation and current file-policy check.
+            # Revalidate the read boundary first: a SQLite wait may outlive the
+            # bound profile, owner, session or task. Do not consume until reads finish.
+            self._authorize_panel_commit(token, panel, claim=False)
+            current = recent(self.home, self.profile, panel.identity['session_id'], cutoff=panel.delivery.cutoff)
+            self._authorize_panel_commit(token, panel, claim=False)
+            if current != panel.delivery or candidates(self.api, self.home, current) != panel.candidates:
+                raise ValueError('Recent delivery changed. Use /shelf add again.')
+            self._authorize_panel_commit(token, panel)
+        saved, existing = self.api.Store(self.home).register_file_once(entry, authorize_commit=authorize)
+        # Drop all old save callbacks, but leave a read-only detail action available.
+        with self.lock:
+            panel.consumed = False
+        text = ('Already saved to Delivery Shelf: ' if existing else 'Saved to Delivery Shelf: ') + saved['title']
+        return self._stage_keyboard(token, panel, text, [('View saved file', ('detail', saved['id']))])
+
+
+    def _prepare_recent(self, identity, raw, epoch, cancelled):
+        from .recent_artifacts import supplied_metadata
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+        try:
+            if not self.permitted(identity) or self.api.bound_home() != self.home:
+                return 'Delivery Shelf not saved: authorized current session and Telegram owner policy required.'
+            supplied = supplied_metadata(raw)
+            with self.lock:
+                if self.epoch != epoch:
+                    return 'Shelf session changed. Use /shelf add again.'
+                self.prune()
+                token = secrets.token_hex(12)
+                panel = Panel(identity.copy(), self.generation, time.monotonic()+TTL, busy=True,
+                              supplied=supplied, cancelled=cancelled)
+                self.panels[token] = panel
+            try:
+                self._load_recent(panel)
+                if not self._panel_current(token, panel, epoch):
+                    raise ValueError('Shelf session changed. Use /shelf add again.')
+                if len(panel.candidates) == 1:
+                    text, markup = self._save_recent(token, panel, 0)
+                elif self.application is None:
+                    raise ValueError('Several recent files found. Ask me to save the selected file in normal chat.')
+                else:
+                    text, markup = self._choose_recent(token, panel)
+                panel.busy = False
+                return token, panel, self.application, text, markup
+            except BaseException:
+                self._drop_panel(token)
+                raise
+        except ValidationError:
+            return 'Delivery Shelf not saved: recent file or metadata is unsupported by the current policy.'
+        except HTTPException as exc:
+            return 'Delivery Shelf not saved: ' + str(exc.detail)
+        except ValueError as exc:
+            return str(exc)
+
+
+    async def add_recent(self, identity, raw='', epoch=None):
+        cancelled = threading.Event()
+        try:
+            prepared = await asyncio.to_thread(self._prepare_recent, identity, raw, epoch, cancelled)
+        except asyncio.CancelledError:
+            cancelled.set()  # A cancelled to_thread worker may still be waiting for SQLite.
+            raise
+        if isinstance(prepared, str):
+            return prepared
+        token, panel, application, text, markup = prepared
+        if application is None:
+            self._drop_panel(token)
+            return text
+        kwargs = dict(chat_id=int(identity['chat']), text=text, reply_markup=markup, parse_mode=None)
+        if identity['thread']:
+            kwargs['message_thread_id'] = int(identity['thread'])
+        try:
+            if not await asyncio.to_thread(self._panel_current, token, panel, epoch):
+                return 'Shelf session changed; inspect saved deliveries before retrying.'
+            message = await application.bot.send_message(**kwargs)
+            return await asyncio.to_thread(self._finish_send, token, panel, message, epoch, text, None)
+        except BaseException:
+            await asyncio.to_thread(self._drop_panel, token)
+            raise
+
+
+    def _perform(self, token, panel, action, value, publication=None):
         if not self._panel_current(token, panel):
             return None
-        if action == 'add':
-            error = self.handoff_error(panel.identity)
-            if error:
-                return error, None
-            request = self._authorize_panel_commit(token, panel, request=True)
-            from . import _recent_add_command
-            result = _recent_add_command(self.ctx, session_id=panel.identity['session_id'],
-                                         session_key=panel.identity['session_key'], platform='telegram', request_id=request)
-            if result is not None:
-                with self.lock:
-                    self.requests.pop(request, None)
-                return result, None
-            return 'Shelf · Requested\nQueued for the current conversation. Nothing saved yet.', None
+        if action in ('add', 'save_recent'):
+            from fastapi import HTTPException
+            from pydantic import ValidationError
+            try:
+                if action == 'add':
+                    try:
+                        self._load_recent(panel)
+                    except ValidationError:
+                        return 'Delivery Shelf not saved: recent file or metadata is unsupported by the current policy.', None
+                    except ValueError as exc:
+                        return str(exc), None
+                    if not self._panel_current(token, panel):
+                        return None
+                    if len(panel.candidates) > 1:
+                        return self._choose_recent(token, panel)
+                return self._save_recent(token, panel, 0 if action == 'add' else value)
+            except (ValueError, HTTPException, ValidationError):
+                # No automatic retry; source/policy may have changed or readback may be ambiguous.
+                self._drop_panel(token)
+                return 'Shelf · Unable to confirm save\nUse /shelf to inspect saved files, or ask me to save the file in normal chat.', None
+        if action == 'cancel_recent':
+            self._authorize_panel_commit(token, panel)
+            return 'Shelf · Cancelled\nNothing saved.', None
         if action in ('page', 'detail'):
-            result = self.keyboard(token, panel, **({'offset': value} if action == 'page' else {'detail': value}))
+            if action == 'page':
+                if publication is None or not self._publication_current(publication):
+                    return None
+                result = self.keyboard(token, panel, offset=value, numbered=publication['numeric'])
+            else:
+                result = self.keyboard(token, panel, detail=value)
             return result if self._panel_current(token, panel) else None
         if action == 'keep':
             self._authorize_panel_commit(token, panel)
@@ -399,12 +838,28 @@ class Controller:
             await query.answer('Shelf panel expired or not authorized.', show_alert=True)
             return
         token, panel, (action, value) = claimed
+        publication = self._begin_publication(panel.identity) if action == 'page' else None
+        started = acknowledged = False
         try:
-            await query.answer()
-            result = await asyncio.to_thread(self._perform, token, panel, action, value)
+            if action == 'page' and publication is None:
+                await query.answer('Shelf list update in progress. Try again.', show_alert=True)
+                return
+            await query.answer('Sending file…' if action == 'download' else None)
+            if action == 'download':
+                # Claim the specific action once, including ambiguous POST outcomes.
+                with self.lock:
+                    panel.actions = {k: v for k, v in panel.actions.items() if v != (action, value)}
+                result = await self.download(panel.identity, [value], panel_token=token, panel=panel)
+                await query.edit_message_text(text=result, reply_markup=None, parse_mode=None)
+                return
+            result = await asyncio.to_thread(self._perform, token, panel, action, value, publication)
             if result is not None:
                 text, markup = result
-                await query.edit_message_text(text=text, reply_markup=markup, parse_mode=None)
+                if publication is not None and not self._publication_current(publication):
+                    return
+                started = True
+                message = await query.edit_message_text(text=text, reply_markup=markup, parse_mode=None)
+                acknowledged = await asyncio.to_thread(self._finish_edit, token, panel, message, text, publication)
         except asyncio.CancelledError:
             # Cancelling to_thread does not stop its worker. Fence it before
             # releasing busy so a waiting write cannot authorize after cancellation.
@@ -412,11 +867,17 @@ class Controller:
             raise
         except Exception:
             # A commit may have succeeded before transport/readback failed; never claim rollback.
+            # Retire old and staged Add/download actions before the error edit.
+            self._drop_panel(token)
             try:
-                await query.edit_message_text(text='Shelf · Could not complete confirmation\nRefresh and inspect the registration before retrying; it may have changed.', reply_markup=None, parse_mode=None)
+                text = ('Shelf · File delivery unconfirmed. Check this chat before requesting again.' if action == 'download' else
+                        'Shelf · Could not complete confirmation\nRefresh and inspect the registration before retrying; it may have changed.')
+                await query.edit_message_text(text=text, reply_markup=None, parse_mode=None)
             except Exception:
                 pass
         finally:
+            if publication is not None:
+                self._end_publication(publication, acknowledged=acknowledged, uncertain=started and not acknowledged)
             await asyncio.to_thread(self._release, panel, action == 'update')
 
     def offer(self, args):

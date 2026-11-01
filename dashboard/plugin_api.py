@@ -24,7 +24,8 @@ VERSION = "0.1.0"
 MAX_FILE = 10 * 1024 * 1024
 MAX_REVISION = 9007199254740991  # JavaScript's largest exact JSON integer.
 TEXT_TYPES = {".txt", ".md", ".csv"}
-FILE_TYPES = TEXT_TYPES | {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+# ZIP is an opaque attachment only, never previewed or extracted.
+FILE_TYPES = TEXT_TYPES | {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".zip"}
 SENSITIVE = re.compile(r"(^|[._ -])(secret[s]?|credential[s]?|token[s]?|password[s]?|private|id_rsa|id_ed25519|auth|config|wallet|backup|env|db|database[s]?|key[s]?)([._ -]|$)", re.I)
 KINDS = Literal["document", "image", "report", "code", "other"]
 
@@ -223,6 +224,14 @@ class Store:
             rows = conn.execute("SELECT * FROM entries" + where + " ORDER BY updated DESC,id LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
         return {"items": [self.decode(row) for row in rows], "total": total, "limit": limit, "offset": offset}
 
+    def recent_attached(self, limit=5):
+        """One bounded catalog selection; do not scan files or replace failures."""
+        if type(limit) is not int or not 1 <= limit <= 5:
+            raise ValueError('Select 1–5 deliveries')
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM entries WHERE json_type(payload,'$.file')='object' ORDER BY updated DESC,id LIMIT ?", (limit,)).fetchall()
+        return [self.decode(row) for row in rows]
+
     def create(self, entry: EntryInput, *, authorize_commit=None):
         entry_id, now = uuid.uuid4().hex, time.time()
         with self.connect() as conn:
@@ -236,6 +245,30 @@ class Store:
                 authorize_commit()
             conn.execute("INSERT INTO entries VALUES (?,?,?,?,1)", (entry_id, entry.model_dump_json(), now, now))
         return self.get(entry_id)
+
+    def register_file_once(self, entry: EntryInput, *, authorize_commit):
+        """Explicit native Add: exact-reference idempotence, never metadata overwrite."""
+        if entry.file is None:
+            raise ValueError('A concrete file is required')
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            with open_file(self.home, entry.file):
+                pass
+            row = conn.execute("SELECT * FROM entries WHERE json_extract(payload,'$.file.root')=? "
+                               "AND json_extract(payload,'$.file.path')=? ORDER BY created,id LIMIT 1",
+                               (entry.file.root, entry.file.path)).fetchone()
+            authorize_commit()
+            existing = row is not None
+            if existing:
+                item = self.decode(row)
+            else:
+                entry_id, now = uuid.uuid4().hex, time.time()
+                conn.execute('INSERT INTO entries VALUES (?,?,?,?,1)',
+                             (entry_id, entry.model_dump_json(), now, now))
+                item = {**entry.model_dump(), 'id': entry_id, 'created': now, 'updated': now, 'revision': 1}
+        if self.get(item['id']) != item:
+            raise ValueError('Readback changed; inspect the registration before retrying')
+        return item, existing
 
     def update(self, entry_id, entry: EntryUpdate, *, authorize_commit=None):
         payload = entry.model_dump(exclude={"revision"})

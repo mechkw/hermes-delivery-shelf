@@ -63,8 +63,12 @@ class CommandTests(unittest.TestCase):
         for text in ('', 'help', 'search absent'):
             reply = self.command(text)
             self.assertIn('/shelf search <query>', reply)
-            for advanced in ('Inline panels unavailable', 'root:path', '--file', 'allow_gateway_injection', '/shelf dl', '/shelf r3'):
+            for advanced in ('Inline panels unavailable', 'root:path', '--file', 'allow_gateway_injection'):
                 self.assertNotIn(advanced, reply)
+        for command in ('/shelf dl', '/shelf download', '/shelf r3'):
+            self.assertIn(command, self.command('help'))
+        for command in ('dl 1', 'download 1', 'r3'):
+            self.assertIn('unavailable here', self.command(command))
         advanced = self.command('help advanced')
         self.assertIn('--file <root:path>', advanced)
         self.assertIn('groups/topics', advanced)
@@ -214,19 +218,11 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(self.entries()["total"], 1)
         self.assertEqual(self.entries()["items"][0], corrected)
 
-    def test_recent_artifacts_add_handoff_is_bound_and_does_not_save_early(self):
+    def test_recent_add_without_authenticated_source_never_hands_off(self):
         reply = self.command('add', session_id='fictional-session', session_key='telegram:fictional')
-        self.assertIsNone(reply)
+        self.assertIn('not saved', reply)
         self.assertEqual(self.entries()['total'], 0)
-        prompt, role, target = self.ctx.injected[-1]
-        self.assertEqual(role, 'user')
-        self.assertEqual(target, {'session_key': 'telegram:fictional'})
-        for text in ('most recent', 'related set', 'delivery_shelf_search',
-                     'delivery_shelf_register', 'no filesystem scans', 'readback'):
-            self.assertIn(text, prompt)
-        data = json.loads(prompt.split('\n', 1)[1])
-        self.assertEqual(data['session_id'], 'fictional-session')
-        self.assertEqual(data['intent'], 'save_recent_artifacts')
+        self.assertEqual(self.ctx.injected, [])
 
     def test_recent_add_denied_missing_context_and_invalid_session(self):
         for args in ({}, {'session_id': 'fictional-session'},

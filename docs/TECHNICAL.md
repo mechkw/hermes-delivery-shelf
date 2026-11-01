@@ -20,8 +20,10 @@ Desktop   → native ctx.rest  → authenticated API ┘       │
 
 - `plugin.yaml`, `VERSION`: package identity, capabilities, dependencies, version.
 - `__init__.py`: four tools and the `/shelf` command; synchronized lazy service loading.
-- `telegram_shelf.py`: profile-owned PTB panels, guarded Add requests and derivative offers;
-  [implementation limits and verification](TELEGRAM.md).
+- `telegram_shelf.py`: profile-owned PTB panels, deterministic Add, acknowledged
+  numbered downloads, advanced handoff guards and derivative offers.
+- `recent_artifacts.py`: bounded read-only native-schema adapter for active-segment
+  `MEDIA:` references; [source limits](DETERMINISTIC_ADD.md).
 - `dashboard/plugin_api.py`: input models, catalog, file policy, and FastAPI routes.
 - `dashboard/manifest.json`: Dashboard page declaration.
 - `ui/Shelf.jsx`, `ui/style.css`: shared React view and scoped styles.
@@ -55,9 +57,12 @@ metadata-only card. Omit `session_id` unless you have an explicit source referen
 the native host supplies a session ID to the tool handler, the tool can retain that ID
 if the input omitted it. It never searches for a likely or most recent conversation.
 
-A session reference is **user/host-supplied metadata, not verified provenance**. Delivery
-Shelf neither checks session ownership nor reads transcripts. Its UI copies the ID; it
-does not invent a session URL or promise automatic conversation reopening.
+A manually supplied session reference is **metadata, not verified provenance**;
+ordinary CRUD does not validate it against a transcript. Deterministic Telegram Add
+is a separate bounded read-only source path: it checks the exact invoking profile
+and session and eligible active assistant file markers. It never copies transcript
+bodies into the catalog. The UI copies the ID, without inventing a session URL or
+promising automatic conversation reopening.
 
 ### Input rules
 
@@ -74,9 +79,18 @@ Saved entries add an opaque ID, Unix-second `created` and `updated` timestamps, 
 integer `revision`. The `kind` label describes a delivery; it does not override the
 attachment extension allowlist. A `code` card cannot make an executable downloadable.
 
-## Assisted command saves
+## Deterministic and assisted command saves
 
-`/shelf add` parses optional title, tags and `--description`, validates the selected
+Telegram `/shelf add` and panel Add use the bounded `recent_artifacts` adapter,
+filename-derived defaults, and `Store.register_file_once()`. A `BEGIN IMMEDIATE`
+reservation serializes exact root/path lookup and creation; an existing reference
+returns its unchanged record. Current profile/owner/session/cancellation guards run
+before post-wait source reads and again after candidate reads. Exact-ID readback
+precedes confirmation. This idempotence is specific to deterministic Add, not general
+CRUD. Active segment and explicit-marker limitations are detailed in
+[Deterministic Add](DETERMINISTIC_ADD.md).
+
+The advanced `/shelf add --file ...` workflow parses optional title, tags and `--description`, validates the selected
 file through the existing root/file policy, and determines which metadata is absent.
 With all fields supplied it saves directly. Otherwise it uses the supported
 `PluginContext.inject_message` to queue a user-requested task for the **current**
@@ -88,8 +102,9 @@ context and the selected filename, calls the registration tool, reads the entry 
 with the search tool, and then confirms title, tags and description. The command
 returns no interim success for an accepted queue request: acceptance is not completion.
 Provider costs and normal agent-context processing apply to assisted saves. The
-plugin itself does not retrieve transcripts, create a second model client, or scan
-folders. Supplying all fields and ordinary searches do not invoke the model.
+advanced workflow does not retrieve transcripts, create a second model client, or
+scan folders. Ordinary deterministic Add, retrieval and catalog search do not invoke
+the model.
 
 Official v0.22.5 provides this injection API. Gateway/modern-host handoff needs
 `plugins.entries.delivery-shelf.allow_gateway_injection: true`. Missing permission
@@ -115,9 +130,11 @@ semantics are unchanged.
 All native tools return a JSON string. CRUD/search uses `{ "ok": true, "data": ... }`
 or `{ "ok": false, "error": ... }`; the offer tool instead returns an explicit
 `status` and, for sent offers, `saved: false`. `/shelf [search text]` returns up to
-20 matching entries. Bare Telegram `/shelf` can send a native panel and return `None`;
-its sync handler returns an awaitable only on that native branch, which the v0.22.5
-gateway dispatcher awaits. See [Telegram behavior and limits](TELEGRAM.md).
+20 matching entries. Native Telegram list/search and Add can send their own panel
+and return `None`; the sync command returns an awaitable which the v0.22.5 gateway
+dispatcher awaits. Returned fallback text has no public send receipt and cannot
+publish numeric download mappings. List/page replacements stage exact entry revisions
+until matching PTB acknowledgement and refuse overlapping publication. See [Telegram behavior and limits](TELEGRAM.md).
 
 ### Correcting metadata
 
@@ -186,7 +203,11 @@ and hard links are refused. Metadata read/search does not read file content.
 
 Downloads are limited to 10 MiB before base64 encoding. Text/Markdown/CSV previews read
 at most 64 KiB and render as escaped text. Binary attachments are downloads, not embedded
-active documents. A permitted file is a live reference, not an immutable snapshot.
+active documents. ZIP is supported only as opaque downloadable bytes; it is never
+unpacked, previewed or executed. No blanket archive expansion is allowed. Telegram
+uses native `send_document`, not the base64 API: a bounded off-loop read and final
+revision/policy/file-identity check precede transport. See [direct retrieval](TELEGRAM.md#direct-file-retrieval-no-model-call).
+A permitted file is a live reference, not an immutable snapshot.
 
 These checks are not content-based secret detection. An innocuously named report can
 still contain private information. Approve narrow delivery directories and register
@@ -281,6 +302,7 @@ user themes are not covered by the two measured palettes.
 
 Version 0.1 does not include automatic capture, generic filesystem browsing, uploads,
 transcript indexing, automatic session reopening, bulk actions, import/export, immutable
-file copies, or general CRUD request-ID deduplication. Telegram Add requests have
-bounded, short-lived duplicate-file protection only; see [Telegram limits](TELEGRAM.md).
+file copies, or general CRUD request-ID deduplication. Deterministic Telegram Add
+has transactional exact-reference deduplication; advanced agent-handoff requests
+have bounded, short-lived duplicate-file claims. See [Telegram limits](TELEGRAM.md).
 Keeping the scope small makes the privacy and file-access rules easier to understand and test.

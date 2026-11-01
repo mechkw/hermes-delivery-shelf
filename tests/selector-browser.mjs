@@ -13,29 +13,43 @@ export async function selectorCases(page,adapter,api,sourceBank,proof){
   if(mode==='error')return route.fulfill({status:503,json:{detail:'Choices temporarily unavailable'}});
   if(q==='slow')await new Promise(r=>setTimeout(r,600));
   const items=q==='none'?[]:response?(url.pathname.includes('other-session')?[{...reply,id:2,preview:'Other assistant reply'}]:q==='slow'?[{...reply,id:3,preview:'STALE RESPONSE'}]:Number(url.searchParams.get('offset'))>0?[{...reply,id:4,preview:'Older assistant reply'}]:[reply]):q==='slow'?[{...choices[0],id:'stale',title:'STALE CONVERSATION'}]:Number(url.searchParams.get('offset'))>0?[{id:'older-session',title:'Older conversation',updated_at:null}]:choices;
-  await route.fulfill({json:{items,has_more:!q&&Number(url.searchParams.get('offset'))===0,window:{limit:response?500:200,truncated:q!=='complete'}}});
+  await route.fulfill({json:{items,has_more:!q&&Number(url.searchParams.get('offset'))===0,window:{limit:response?500:1000,truncated:q!=='complete'}}});
  });
  // Observe native transport mutations without substituting their results.
  page.on('request',r=>{if(r.url().includes(prefix+'/entries')&&['POST','PUT','DELETE'].includes(r.method()))writes.push({method:r.method(),body:r.postDataJSON()});});
  const choose=async(label,name)=>{const box=page.getByRole('dialog').getByRole('combobox',{name:label,exact:true});await box.click();await page.getByRole('option',{name,exact:false}).click();};
  const editor=()=>page.getByRole('dialog');
+ const tooltip=async(name,text)=>{
+  const button=editor().getByRole('button',{name,exact:true});
+  const trigger=await button.isDisabled()?editor().locator(`[aria-label="${name} unavailable"]`):button;
+  await page.mouse.move(0,0);await editor().getByLabel('Search conversations',{exact:true}).focus();await expect(page.getByRole('tooltip')).toHaveCount(0);await trigger.scrollIntoViewIfNeeded();await trigger.hover();await expect(page.locator('[role=tooltip]:not([data-state=closed])')).toBeVisible();await expect(page.locator('[role=tooltip]:not([data-state=closed])')).toHaveText(text);
+  await page.screenshot({path:join(proof,`tooltip-${adapter}-${name.replace(' ','-')}.png`),fullPage:true});
+  await page.mouse.move(0,0);await editor().getByLabel('Search conversations',{exact:true}).focus();await expect(page.getByRole('tooltip')).toHaveCount(0);
+  // Real keyboard input establishes the host's input-modality gate.
+  for(let n=0;n<20&&!await trigger.evaluate(el=>el===document.activeElement);n++)await page.keyboard.press('Tab');
+  await expect(trigger).toBeFocused();await expect(page.locator('[role=tooltip]:not([data-state=closed])')).toBeVisible();await expect(page.locator('[role=tooltip]:not([data-state=closed])')).toHaveText(text);
+  await page.keyboard.press('Escape');await expect(page.locator('[role=tooltip]:not([data-state=closed])')).toHaveCount(0);await expect(editor()).toBeVisible();
+  await editor().getByLabel('Search conversations',{exact:true}).focus();
+ };
  await page.getByRole('tab',{name:'Bookmarks',exact:true}).click();
  await page.getByRole('button',{name:'Save bookmark',exact:true}).click();
  await expect(editor().getByRole('combobox',{name:'Response (optional)',exact:true})).toContainText('Entire conversation');
  await expect(editor().getByRole('button',{name:'Save bookmark',exact:true})).toBeDisabled();
  await expect(editor().getByText('Session ID',{exact:true})).toHaveCount(0);
- await choose('Conversation','Release planning');
+ await choose('Choose a conversation','Release planning');
  await expect(editor().getByLabel('Title',{exact:true})).toHaveValue('Release planning');
  await expect(editor().getByLabel('Note',{exact:true})).toHaveValue('');
- await expect(editor().getByText('Search covers the most recent 200 conversations. Older conversations are not included.',{exact:true})).toBeVisible();
+ await tooltip('Previous conversations','Search filter covers the most recent 1000 conversations. Older conversations are not included.');
  await expect(editor().getByRole('button',{name:'Next conversations'})).toBeEnabled();
+ await expect(editor().getByRole('button',{name:'Next conversations'})).toHaveText('Next');
+ await tooltip('Next conversations','Search filter covers the most recent 1000 conversations. Older conversations are not included.');
  await editor().getByRole('button',{name:'Next conversations'}).click();
  await expect.poll(()=>requests.some(u=>u.searchParams.get('offset')==='30')).toBe(true);
  await expect(editor().getByRole('button',{name:'Previous conversations'})).toBeEnabled();
- await choose('Conversation','Older conversation');
+ await choose('Choose a conversation','Older conversation');
  await expect(editor().getByLabel('Title',{exact:true})).toHaveValue('Release planning');
  await editor().getByRole('button',{name:'Previous conversations'}).click();
- await choose('Conversation','Release planning');
+ await choose('Choose a conversation','Release planning');
  await choose('Response (optional)','Ship the reviewed build');
  await editor().getByRole('button',{name:'Next responses'}).click();
  await expect.poll(()=>requests.some(u=>u.pathname.endsWith('/responses')&&u.searchParams.get('offset')==='30')).toBe(true);
@@ -47,9 +61,9 @@ export async function selectorCases(page,adapter,api,sourceBank,proof){
  mode='normal';await editor().getByRole('button',{name:'Retry responses'}).click();
  await expect(editor().getByRole('button',{name:'Retry responses'})).toHaveCount(0);
  await editor().getByLabel('Search responses',{exact:true}).fill('none');await expect(editor().getByText('No matches',{exact:true})).toBeVisible();
- await expect(editor().getByText('Search covers the most recent 500 assistant responses. Older assistant responses are not included.',{exact:true})).toBeVisible();
+ await tooltip('Next responses','Search filter covers the most recent 500 assistant responses. Older assistant responses are not included.');
  await editor().getByLabel('Search responses',{exact:true}).fill('complete');
- await expect(editor().getByText('Search covers up to 500 recent assistant responses. All available assistant responses are included.',{exact:true})).toBeVisible();
+ await tooltip('Next responses','Search filter covers up to 500 recent assistant responses. All available assistant responses are included.');
 
  // A response search must not submit the metadata form when its clear action
  // is activated (the native SearchField's clear control is inside the form).
@@ -57,26 +71,26 @@ export async function selectorCases(page,adapter,api,sourceBank,proof){
  await editor().getByLabel('Search responses',{exact:true}).press('Enter');await page.waitForTimeout(250);await expect(editor()).toBeVisible();expect(writes).toHaveLength(0);await expect(editor().getByLabel('Search responses',{exact:true})).toHaveValue('ship');
  if(adapter==='desktop'){await editor().locator('[aria-label="Response (optional) choices"]').getByRole('button',{name:/Clear/}).click();await expect(editor()).toBeVisible();expect(writes).toHaveLength(0);}
  else await editor().getByLabel('Search responses',{exact:true}).fill('');
- await choose('Conversation','Other conversation');
+ await choose('Choose a conversation','Other conversation');
  await expect(editor().getByRole('combobox',{name:'Response (optional)',exact:true})).toContainText('Entire conversation');
- await choose('Conversation','Release planning');
+ await choose('Choose a conversation','Release planning');
  await editor().getByLabel('Search responses',{exact:true}).fill('slow');
  await expect.poll(()=>requests.some(u=>u.pathname.endsWith('/responses')&&u.searchParams.get('q')==='slow')).toBe(true);
- await choose('Conversation','Other conversation');
+ await choose('Choose a conversation','Other conversation');
  await page.waitForTimeout(700);
  await editor().getByRole('combobox',{name:'Response (optional)',exact:true}).click();
  await expect(page.getByRole('option',{name:/STALE RESPONSE/})).toHaveCount(0);
  await page.keyboard.press('Escape');
  await expect(editor()).toBeVisible();
- await choose('Conversation','Release planning');
+ await choose('Choose a conversation','Release planning');
  await editor().getByLabel('Search conversations',{exact:true}).fill('slow');
  await expect.poll(()=>requests.some(u=>u.pathname==prefix+'/sources/sessions'&&u.searchParams.get('q')==='slow')).toBe(true);
  await editor().getByLabel('Search conversations',{exact:true}).fill('none');
  await expect(editor().getByText('No matches',{exact:true})).toBeVisible();
  await page.waitForTimeout(700);
  await expect(editor().getByText('No matches',{exact:true})).toBeVisible();
- await expect(editor().getByRole('combobox',{name:'Conversation',exact:true})).toContainText('Release planning');
- await expect(editor().getByText('Search covers the most recent 200 conversations. Older conversations are not included.',{exact:true})).toBeVisible();
+ await expect(editor().getByRole('combobox',{name:'Choose a conversation',exact:true})).toContainText('Release planning');
+ await tooltip('Previous conversations','Search filter covers the most recent 1000 conversations. Older conversations are not included.');
  mode='error';await editor().getByLabel('Search conversations',{exact:true}).fill('fail');
  await expect(editor().getByRole('button',{name:'Retry conversations'})).toBeVisible();
  mode='normal';await editor().getByRole('button',{name:'Retry conversations'}).click();
@@ -95,7 +109,7 @@ export async function selectorCases(page,adapter,api,sourceBank,proof){
  await page.getByRole('button',{name:'Old reference',exact:true}).click();await editor().getByRole('button',{name:'Edit bookmark'}).click();
  mode='normal';await editor().getByLabel('Search conversations',{exact:true}).fill('none');await editor().getByLabel('Search responses',{exact:true}).fill('none');
  await expect(editor().getByText('No matches',{exact:true})).toHaveCount(2);
- await expect(editor().getByRole('combobox',{name:'Conversation',exact:true})).toContainText('Saved conversation');
+ await expect(editor().getByRole('combobox',{name:'Choose a conversation',exact:true})).toContainText('Saved conversation');
  await expect(editor().getByRole('combobox',{name:'Response (optional)',exact:true})).toContainText('Saved response');
  await editor().getByLabel('Note',{exact:true}).fill('My edited note');
  let release,seen;const held=new Promise(r=>release=r),entered=new Promise(r=>seen=r);
@@ -114,7 +128,7 @@ export async function selectorCases(page,adapter,api,sourceBank,proof){
  // No source mocks for this smoke: real backend enumeration → native choices
  // → real creation/readback, with only assistant visible text in the picker.
  await page.getByRole('button',{name:'Save bookmark',exact:true}).click();
- await choose('Conversation','Native source conversation');
+ await choose('Choose a conversation','Native source conversation');
  await choose('Response (optional)','Native assistant preview from the real source API.');
  for(const width of [360,1440]){
   await page.setViewportSize({width,height:1100});

@@ -70,7 +70,15 @@ server or require new inbound ports.
 /shelf add Approved artwork #branding --description "Selected release hero." --file workspaces:launch/hero.webp
 ```
 
-**Supply as little metadata as you like.** The current Hermes agent generates any
+**Telegram quick save:** `/shelf add` or the panel's **Add** saves a recent file
+without a model call. One file saves directly; several open a chooser. Existing
+registrations are kept unchanged. The default title is the filename, with empty
+tags and description; optional supplied fields are preserved. Add recognizes
+explicit `MEDIA:` references in the active conversation segment. If a delivery is
+older, compressed away or otherwise unavailable, ask Hermes to save it in normal chat.
+See [source limits](DETERMINISTIC_ADD.md).
+
+**Advanced `--file` saves: supply as little metadata as you like.** The current Hermes agent generates any
 missing title, tags and description using the conversation and selected filename,
 saves the entry, verifies it, and confirms the saved details in one short reply.
 It preserves anything you supply rather than asking you to fill out a form. Supplying
@@ -83,9 +91,8 @@ hosts retain an explicitly labeled text fallback. A query lists up to 20 matches
 `add`, `search`, and `help` are reserved leading commands. Use `/shelf search <query>`
 when a query begins with a reserved word; `/shelf help` shows syntax.
 
-Bare `add` asks the current agent for the most recent artifact(s) already identifiable
-from the current conversation; ambiguous or absent candidates require clarification.
-No folder scans or newest-mtime selection occur. The optional explicit `--file`
+Ordinary Telegram Add never scans folders or selects by modification time.
+The advanced explicit `--file`
 reference is `<approved-root-alias>:<relative-path>` on the backend,
 not a Telegram file ID or a path on your phone. Quote references containing spaces.
 All existing file safety and approved-root checks still apply.
@@ -98,9 +105,11 @@ literal commas. Tags retain their first spelling/case after boundary trimming an
 case-insensitive deduplication. Tag filters remain case-insensitive, including older
 lowercase entries; existing entries are not rewritten.
 
-Fully specified slash saves default to the `document` kind. Use the UI or structured
-tool to set kind, project, or other fields. Commands/panels do not send the
-attached file into Telegram. Asking Hermes to send the file is a separate action.
+Fully specified `--file` saves default to the `document` kind. Use the UI or
+structured tool to set kind, project, or other fields. Saving alone does not send
+file bytes. To retrieve them, choose an entry → **Send file**, `/shelf dl 1` from an
+acknowledged numbered list, or `/shelf r1` through `/shelf r5` for recent attachments.
+These retrieval paths need no model or injection consent.
 
 ### Enable agent-assisted metadata
 
@@ -111,7 +120,8 @@ profile once:
 hermes config set plugins.entries.delivery-shelf.allow_gateway_injection true
 ```
 
-This permits the plugin's explicit save command to hand work to the existing Hermes
+This is optional for advanced `--file` metadata completion; ordinary Telegram Add
+and retrieval do not need it. It permits that advanced command to hand work to the existing Hermes
 agent in the invoking session. The plugin does not create another model client or
 collect transcripts; the normal agent/provider processes its conversation context.
 Normal inference costs apply to assisted saves. Searches and fully specified saves
@@ -176,7 +186,8 @@ of approved roots.
 ### File limits
 
 Supported attachment extensions: `.txt`, `.md`, `.csv`, `.pdf`, `.png`, `.jpg`,
-`.jpeg`, `.webp`, and `.gif`. Only text, Markdown, and CSV have inline plain-text
+`.jpeg`, `.webp`, `.gif`, and `.zip`. ZIP is an opaque download: never unpacked,
+rendered, or executed. No other archive extensions are accepted. Only text, Markdown, and CSV have inline plain-text
 previews. Binary files are downloads, not active embedded documents. HTML, SVG,
 executables, databases, dotfiles, unsafe path segments, and obvious sensitive filenames
 are not downloadable.

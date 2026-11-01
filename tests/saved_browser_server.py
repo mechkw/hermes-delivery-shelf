@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='sv-', dir=sys.argv[2]) as directory:
     for name in installed:
         target = home / 'plugins' / name
         target.mkdir(parents=True)
-        for file in ('__init__.py', 'plugin.yaml', 'telegram_shelf.py'):
+        for file in ('__init__.py', 'plugin.yaml', 'telegram_shelf.py', 'recent_artifacts.py'):
             if (repos[name] / file).is_file():
                 shutil.copy2(repos[name] / file, target / file)
         for folder in ('dashboard', 'desktop'):

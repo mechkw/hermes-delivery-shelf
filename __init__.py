@@ -249,41 +249,56 @@ def register(ctx):
     )
     def command(raw_args, *, source=None, session_id=None, session_key=None, platform=None):
         text = raw_args.strip()
+        import re
+        if re.fullmatch(r'r[0-9]+', text):
+            if not re.fullmatch(r'r[1-5]', text):
+                return 'Use /shelf r1 through /shelf r5 (1–5 recent attached deliveries).'
+            if platform != 'telegram' or controller.application is None:
+                return 'File sending unavailable here; download in Desktop or Dashboard.'
+            return controller.download_recent(controller.identity(source, session_id, session_key, platform), int(text[1:]))
+        if text.split(maxsplit=1)[:1] in (["dl"], ["download"]):
+            match = re.fullmatch(r'(?:dl|download) ([1-9][0-9]?)', text)
+            if not match:
+                return 'Use /shelf dl <number> from your last /shelf list.'
+            if platform != 'telegram' or controller.application is None:
+                return 'File sending unavailable here; download in Desktop or Dashboard.'
+            return controller.download_number(controller.identity(source, session_id, session_key, platform), int(match[1]))
         if not text and platform == "telegram" and controller.application is not None:
             # v0.22.5 dispatcher awaits a coroutine returned from a sync command.
             # Text/CLI branches remain synchronous for existing consumers.
             return controller.send(controller.identity(source, session_id, session_key, platform), epoch=controller.epoch)
-        if text == "add" and source is not None and platform == "telegram":
-            identity = controller.identity(source, session_id, session_key, platform)
-            error = controller.handoff_error(identity)
-            if error:
-                return error
-            request = controller.new_request(identity)
-            result = _recent_add_command(ctx, session_id=session_id, session_key=session_key,
-                                         platform=platform, request_id=request)
-            if result is not None:
-                with controller.lock:
-                    controller.requests.pop(request, None)
-            return result
+        if text.split(maxsplit=1)[:1] == ['add'] and platform == 'telegram':
+            import re
+            # Advanced explicit-file workflow remains separate and unchanged.
+            if not re.search(r'(?:^|\s)--file(?:\s|$)', text[3:]):
+                if source is None:
+                    return 'Delivery Shelf not saved: authorized current session and Telegram owner policy required.'
+                identity = controller.identity(source, session_id, session_key, platform)
+                return controller.add_recent(identity, text[3:].strip(), epoch=controller.epoch)
         if text == "help":
             return ('/shelf — browse saved deliveries\n'
                     '/shelf search <query> — find a saved delivery\n'
-                    'Use Desktop or Dashboard to add, download or edit entries.\n'
+                    '/shelf add — save a recent file from this conversation\n'
+                    '/shelf dl <number> — send from your last list (10 minutes)\n'
+                    '/shelf download <number> — same as dl\n'
+                    '/shelf r3 — send up to 3 recent attached deliveries (r1–r5)\n'
+                    'Telegram file sends need no model; Desktop/Dashboard also support downloads.\n'
                     '/shelf help advanced — manual saves and setup details')
         if text == "help advanced":
             return ('/shelf — Telegram inline panel (when available); otherwise text list\n'
                     '/shelf <query> or /shelf search <query> — search saved deliveries\n'
-                    '/shelf add — request the most recent delivered artifact(s) in this conversation; same as panel Add\n'
+                    '/shelf add [title] [#tags] [--description "text"] — save a recent file; multiple files open a chooser\n'
                     '/shelf add [title] [#tag1, tag2] --file <root:path> [--description "text"] — choose an explicit file\n'
                     '/shelf help advanced — show this syntax without saving\n'
                     'Files must exist in an approved root; quote file references containing spaces. '
-                    'Bare Add never scans folders and asks if the intended artifact is unclear.\n'
-                    'The current agent fills only missing title, tags and description, then saves and verifies. '
+                    'Telegram Add reads only explicit recent delivery references in this conversation, without a model. '
+                    'No file found? Ask me to save the file in normal chat.\n'
+                    'For advanced --file commands, the current agent fills missing metadata. '
                     'Assisted saves require current session context and '
                     'plugins.entries.delivery-shelf.allow_gateway_injection: true; queued is not saved. '
                     'Supply all metadata with --file to save directly without a model turn.\n'
-                    'Telegram groups/topics: Add and missing-metadata handoffs are refused; use a private chat '
-                    'or supply all metadata with --file. Browsing and fully specified saves remain available. '
+                    'Telegram Add works in groups/topics. Advanced --file missing-metadata handoffs still require a private chat '
+                    'or fully supplied metadata. '
                     'Native panels/Add also require the operator owner policy.')
         if text.split(maxsplit=1)[:1] == ["add"]:
             identity = controller.identity(source, session_id, session_key, platform) if source is not None and platform == 'telegram' else None
@@ -291,6 +306,11 @@ def register(ctx):
                                 controller=controller, identity=identity)
         if text.split(maxsplit=1)[:1] == ["search"]:
             text = text[6:].strip()
+        if platform == 'telegram' and source is not None:
+            try:
+                return controller.numbered_list(controller.identity(source, session_id, session_key, platform), text)
+            except Exception:
+                return 'Shelf · List unavailable. Try /shelf again.'
         result = json.loads(_run("search", {"q": text, "limit": 20}))
         if not result["ok"]:
             return "Delivery Shelf: " + result["error"]
@@ -303,6 +323,6 @@ def register(ctx):
     # Keep description <=40 characters: the host truncates plugin menu descriptions.
     ctx.register_command(
         "shelf", command, description="Browse/add deliveries; /shelf help",
-        args_hint='[query | search <query> | add | help]',
+        args_hint='[query | search <query> | dl <number> | r1–r5 | add | help]',
         argument_mode="text",
     )

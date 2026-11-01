@@ -99,12 +99,18 @@ From chat, use:
 
 `/shelf <query>` searches. On configured Telegram connections, bare `/shelf` opens
 an attached inline panel: **Add**, recent entries, then **Browse more**.
-`/shelf add` asks the agent to save the most recent artifact(s) already identifiable
-in the current conversation—never a folder scan. Use `--file` to choose an exact
-existing file instead. [Telegram owner policy, derivative offers, and limits →](docs/TELEGRAM.md)
-Leave out the title, tags or description and your current Hermes agent generates
-the missing details, saves the entry, and confirms all three in one short reply.
-Anything you supply takes precedence. Tags keep their first spelling/case, with boundary
+On Telegram, `/shelf add` saves a recent file from this conversation **without a
+model call**, in private chats and groups/topics. One file saves immediately;
+several files open a chooser. An already-saved file keeps its existing card and
+metadata. The filename supplies the default title; tags and description stay empty
+unless you provide them. If no recent file is available, ask Hermes to save it in
+normal chat. Add recognizes explicit `MEDIA:` file references in the active part
+of this conversation, not older compressed history or arbitrary links.
+[Telegram owner policy, source limits, and derivative offers →](docs/TELEGRAM.md)
+
+Use the advanced `--file` command to choose an exact existing file instead. In that
+workflow, your current Hermes agent fills omitted title, tags or description and
+verifies the save; fully supplied metadata saves directly. Anything you supply takes precedence. Tags keep their first spelling/case, with boundary
 whitespace trimmed and case-insensitive duplicates removed. Tag filtering remains
 case-insensitive. There is no metadata questionnaire.
 
@@ -118,6 +124,16 @@ Or ask Hermes:
 > “Find the final reports in my Delivery Shelf for the Website project.”
 
 Want a correction? Ask Hermes to change the saved title, tags or description; it updates the existing entry rather than making another card. Native tools are `delivery_shelf_register`, `delivery_shelf_search`, `delivery_shelf_update`, and `delivery_shelf_offer_update`. The last offers a new derivative for approval; same-file edits stay silent. Removal remains in the UI. [Structured examples and API details →](docs/TECHNICAL.md)
+
+### Retrieve a file in Telegram
+
+Open `/shelf`, select an entry, and tap **Send file**. Or use `/shelf dl 1`
+(`/shelf download 1`) for item 1 of your last numbered list, valid for ten minutes.
+`/shelf search <query>` narrows that list. `/shelf r3` sends up to three recent
+attached deliveries; `r1` through `r5` are supported. Missing files are reported,
+not replaced with guesses. Retrieval needs **no model call** or agent-handoff consent.
+Native transport and the owner policy are required; Desktop/Dashboard remain the
+fallback. ZIP files are opaque attachments, never unpacked or previewed.
 
 ## Files stay where they belong
 

@@ -41,7 +41,7 @@ class Runner(GatewayInboundHooksMixin):
 def prepare(home, isolation='in_process'):
     target = home/'plugins/delivery-shelf'
     target.mkdir(parents=True)
-    for name in ('__init__.py','telegram_shelf.py','plugin.yaml'):
+    for name in ('__init__.py','telegram_shelf.py','recent_artifacts.py','plugin.yaml'):
         shutil.copy2(ROOT/name, target/name)
     shutil.copytree(ROOT/'dashboard',target/'dashboard')
     (home/'workspaces').mkdir()
@@ -90,15 +90,15 @@ async def main():
                     'chat_instance':'fixture', 'data':data,
                     'message':{'message_id':int(panel.message),'date':1,'message_thread_id':9,
                                'chat':{'id':17,'type':'private'},'text':'Shelf'}}},app.bot)
-            await app.process_update(update(f'shelf:{nonce}:0'))
+            assert await runner._hm_run_plugin_handler(handler, None, source, session_entry=entry,
+                args='add --file workspaces:first.md') is None
             assert len(queued)==1 and queued[0]['session_key']=='telegram:17:9', queued
             assert Path(queued[0]['plugin_home'])==home
             search = registry.get_entry('delivery_shelf_search',scope=manager.scope_key).handler
             register = registry.get_entry('delivery_shelf_register',scope=manager.scope_key).handler
             offer = registry.get_entry('delivery_shelf_offer_update',scope=manager.scope_key).handler
             assert json.loads(search({}))['data']['total']==0
-            assert 'Nothing saved yet' in capture.calls[-1][1]['text']
-            request = json.loads(queued[0]['content'].split('\n',1)[1])['request_id']
+            request = json.loads(queued[0]['content'].split('\n',1)[1])['supplied']['request_id']
             with runner._session_env_scope(entry):
                 saved = json.loads(register({'title':'Native result','tags':['Keep-Case'],
                     'description':'Fictional description','session_id':'native-session','request_id':request,
@@ -126,7 +126,7 @@ async def main():
             assert json.loads(search({'q':'NativeCase'}))['data']['items'][0] == second['data']
             assert second['data']['tags'] == ['Keep-Tag']
             group = SessionSource(platform=Platform.TELEGRAM, chat_id='-100', chat_type='group', user_id='17', thread_id='9')
-            refusal = await runner._hm_run_plugin_handler(handler, None, group, session_entry=entry, args='add')
+            refusal = await runner._hm_run_plugin_handler(handler, None, group, session_entry=entry, args='add --file workspaces:first.md')
             assert 'Nothing queued' in refusal and len(queued) == 2
             print('PASS native completed Add → fresh explicit-file token → exact readback; shared-group refusal before native injection')
             manager.invoke_hook('on_session_reset', old_session_id='native-session', session_id='new-session')
@@ -155,6 +155,9 @@ async def main():
             result = await asyncio.to_thread(invoke_plugin_command, handler, '', platform='telegram')
             assert 'Delivery Shelf' in result and '/shelf search <query>' in result, result
             assert 'Inline panels unavailable' not in result and '--file' not in result
+            for args in ('dl 1', 'download 1', 'r3'):
+                fallback = await asyncio.to_thread(invoke_plugin_command, handler, args, platform='telegram')
+                assert isinstance(fallback, str) and 'unavailable here' in fallback, fallback
             print('PASS real isolated plugin host: loads text command, no native factories, honest inline fallback')
         finally:
             manager.unload()

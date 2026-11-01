@@ -33,7 +33,7 @@ def main():
                    GIT_CONFIG_GLOBAL=os.devnull)
         fixture = base/'fixture'
         fixture.mkdir()
-        for name in ('plugin.yaml', '__init__.py', 'telegram_shelf.py', 'VERSION'):
+        for name in ('plugin.yaml', '__init__.py', 'telegram_shelf.py', 'recent_artifacts.py', 'VERSION'):
             shutil.copy2(ROOT/name, fixture/name)
         for name in ('dashboard', 'desktop'):
             shutil.copytree(ROOT/name, fixture/name, ignore=shutil.ignore_patterns('__pycache__'))
@@ -54,7 +54,7 @@ def main():
         native('from hermes_cli.plugins_cmd_install import cmd_install; '
                f'cmd_install({fixture.as_uri()!r}, enable=False, no_deps=True)')
         target = bank/'plugins/delivery-shelf'
-        for name in ('__init__.py', 'telegram_shelf.py', 'dashboard/plugin_api.py', 'dashboard/dist/index.js', 'desktop/plugin.js'):
+        for name in ('__init__.py', 'telegram_shelf.py', 'recent_artifacts.py', 'dashboard/plugin_api.py', 'dashboard/dist/index.js', 'desktop/plugin.js'):
             assert (target/name).read_bytes() == (fixture/name).read_bytes(), name
         # Exercise the actual Electron filesystem implementation without Electron/IPC.
         module = base/'desktop-root.mjs'

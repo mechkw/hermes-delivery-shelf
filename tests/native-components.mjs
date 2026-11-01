@@ -8,6 +8,7 @@ export const uiExports={
  'components/ui/textarea':['Textarea'],'components/ui/search-field':['SearchField'],
  'components/ui/select':['Select','SelectTrigger','SelectValue','SelectContent','SelectItem'],
  'components/ui/dialog':['Dialog','DialogContent','DialogHeader','DialogTitle','DialogDescription','DialogFooter'],
+ 'components/ui/tooltip':['Tooltip','TooltipProvider','TooltipTrigger','TooltipContent'],
  'components/ui/tabs':['Tabs','TabsList','TabsTrigger'],
  'components/ui/empty-state':['EmptyState'],'components/ui/error-state':['ErrorState'],
  'components/ui/loader':['Loader'],'app/settings/primitives':['ListRow'],
