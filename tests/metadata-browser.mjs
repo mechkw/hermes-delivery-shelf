@@ -22,7 +22,7 @@ export async function metadataCases(page,adapter,api){
   expect((await api(id,'/entries?tag='+encodeURIComponent(tags[0]))).items.map(x=>x.id)).toEqual([seeded.id]);
   await page.getByRole('button',{name:seeded.title,exact:true}).click();await dialog().getByRole('button',{name:edit}).click();
   await dialog().getByLabel(bookmarks?'Tags':'Tags (one per line)',{exact:true}).fill('changed, intact\ncafé 日本語');
-  if(!bookmarks)await choose('Kind','report');
+  if(!bookmarks){await dialog().getByText('More options',{exact:true}).click();await choose('Kind','report');}
   await dialog().getByRole('button',{name:'Save changes'}).click();await expect(dialog()).toHaveCount(0);
   current=await api(id,'/entries/'+seeded.id);expect(current.tags).toEqual(['changed, intact','café 日本語']);if(!bookmarks)expect(current.kind).toBe('report');
   // Search and native Select sorting/filtering, including escaped titles.
@@ -73,17 +73,17 @@ export async function pendingMutationCases(page,adapter,api,base){
 }
 
 export async function sourceFenceCases(page,adapter,base){
- for(const change of ['profile',...(adapter==='desktop'?['connection']:[]),'dispose']){
-  await page.goto(base+'/qa/'+adapter);await expect(page.getByRole('tab')).toHaveCount(2);await page.getByRole('tab',{name:'Bookmarks',exact:true}).click();
-  await page.getByRole('button',{name:'Save bookmark',exact:true}).click();
+ for(const [id,tab,button] of [['conversation-bookmarks','Bookmarks','Save bookmark'],['delivery-shelf','Deliverables','Add delivery']])for(const change of ['profile',...(adapter==='desktop'?['connection']:[]),'dispose']){
+  await page.goto(base+'/qa/'+adapter);await expect(page.getByRole('tab')).toHaveCount(2);await page.getByRole('tab',{name:tab,exact:true}).click();
+  await page.getByRole('button',{name:button,exact:true}).click();
   let release,seen;const held=new Promise(r=>release=r),entered=new Promise(r=>seen=r);
-  const pattern='**/api/plugins/conversation-bookmarks/sources/sessions?**';
+  const pattern='**/api/plugins/'+id+'/sources/sessions?**';
   await page.route(pattern,async route=>{if(new URL(route.request().url()).searchParams.get('q')!=='fence'){await route.continue();return;}seen();await held;await route.fulfill({json:{items:[{id:'stale-secret',title:'Retired source result',updated_at:null}],has_more:false}});});
   await page.getByRole('dialog').getByLabel('Search conversations',{exact:true}).fill('fence');await entered;
   await page.evaluate(({adapter,change})=>{if(adapter==='desktop'){if(change==='dispose')for(const id of ['conversation-bookmarks','delivery-shelf'])window.__QA_UNLOAD__(id);else window.__QA_SDK__.host.state[change==='profile'?'profile':'connectionId'].set(change==='profile'?'foreign':'next-connection');}else if(change==='profile')window.__QA_PROFILE__('foreign');else window.__QA_UNMOUNT__();},{adapter,change});
   await expect(page.getByRole('dialog')).toHaveCount(0);release();await page.unroute(pattern,{behavior:'wait'});await page.waitForTimeout(250);
   await expect(page.getByText('Retired source result',{exact:false})).toHaveCount(0);
-  console.log('PASS pending source fence',adapter,change);
+  console.log('PASS pending source fence',adapter,id,change);
  }
  await page.goto(base+'/qa/'+adapter);await expect(page.getByRole('tab')).toHaveCount(2);
 }

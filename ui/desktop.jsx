@@ -20,6 +20,8 @@ export default {
           return result;
         };
         request.copyText=async(text)=>{if(!valid() || !await ctx.os.writeClipboard(text))throw new Error('Copy unavailable');};
+        request.desktop=true;
+        request.openSession=id=>{if(valid())host.openSession(id);};
         return request;
       },[profile,connection]);
       return <Shelf key={JSON.stringify([profile,connection])} api={api} embedded/>;

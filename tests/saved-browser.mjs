@@ -5,6 +5,7 @@ import {build} from 'esbuild';
 import {createRequire} from 'node:module';
 import {realUI} from './native-components.mjs';
 import {metadataCases,pendingMutationCases,sourceFenceCases} from './metadata-browser.mjs';
+import {shelfRedesignCases,shelfGenerationFenceCases} from './shelf-redesign-browser.mjs';
 import {selectorCases} from './selector-browser.mjs';
 import {sourceDetailCases,titleBoundsCases,focusEditorCases} from './review-browser.mjs';
 import {sourceFixture} from './native-source-fixture.mjs';
@@ -133,6 +134,7 @@ const stubPlugin={name:'host-boundary-doubles',setup(b){
  b.onLoad({filter:/.*/,namespace:'qa'},args=>({contents:({keybind:'export const useKeybindHint=()=>null;',hermes:'export const getHermesConfigRecord=async()=>({}),retainConfigReadOrigin=x=>x,saveHermesConfig=async()=>({ok:true});',api:apiStub,profile:'export const dashboardServingProfile=()=>"default";',utils:'export const cn=(...a)=>a.join(" "),timeAgo=()=>"",isoTimeAgo=()=>"";',i18n:'export const useI18n=()=>({t:{}});',sdk:sdkStub,fs:'export const isReadFileErrorResult=()=>false;',notifications:'export const notifyError=(e)=>{throw e;};',events:'export const trackGatewayEventDisposers=(track,fn)=>fn();',plugin:contextStub})[args.path],loader:'js',resolveDir:root}));
 }};
 const pins={};
+for(const file of ['ui/ShelfEditor.jsx','ui/ArtifactCard.jsx','dashboard/artifact_source.py','dashboard/native_history.py','tests/shelf-redesign-browser.mjs'])pins[join(root,file)]=createHash('sha256').update(await readFile(join(root,file))).digest('hex');
 for(const repo of [root,peer])for(const file of ['desktop/plugin.js','dashboard/dist/index.js','dashboard/manifest.json','ui/Saved.jsx','ui/saved-coordinator.js','ui/saved.css','ui/desktop.jsx','ui/dashboard.jsx',repo.endsWith('bookmarks')?'ui/Bookmarks.jsx':'ui/Shelf.jsx','tests/saved-browser.mjs','tests/saved_browser_server.py','ui/presentation.desktop.jsx','ui/presentation.dashboard.jsx','ui/collection-focus.js','ui/style.css',...(repo.endsWith('bookmarks')?['ui/BookmarkEditor.jsx']:[]),'tests/review-browser.mjs','tests/selector-browser.mjs','tests/metadata-browser.mjs','tests/native-components.mjs'])pins[join(repo,file)]=createHash('sha256').update(await readFile(join(repo,file))).digest('hex');
 for(const repo of [root,peer])for(const file of ['__init__.py','plugin.yaml','dashboard/plugin_api.py','tests/native_probe.py','tests/native-source-fixture.mjs'])pins[join(repo,file)]=createHash('sha256').update(await readFile(join(repo,file))).digest('hex');
 for(const file of ['hermes_cli/web_server.py','hermes_cli/web_server_dashboard.py','hermes_state.py'])pins[join(backendSource,file)]=createHash('sha256').update(await readFile(join(backendSource,file))).digest('hex');
@@ -281,7 +283,7 @@ try{
      expect(await page.locator('.hs-saved-tabs button,.hs-saved-missing button,.hs-saved-link').evaluateAll(nodes=>nodes.filter(n=>n.getBoundingClientRect().height>0).every(n=>n.getBoundingClientRect().height>0))).toBe(true);
      await page.screenshot({path:join(proof,`${scenario}-${adapter}-${order}-${width}.png`),fullPage:true});
     }
-    if(scenario==='both'){await focusEditorCases(page,adapter,api,proof);await titleBoundsCases(page,adapter,api,proof);await sourceDetailCases(page,adapter,api,sourceBank);await availabilityFailures(page,adapter);await selectorCases(page,adapter,api,sourceBank,proof);await metadataCases(page,adapter,api);await pendingMutationCases(page,adapter,api,base);await sourceFenceCases(page,adapter,base);}
+    if(scenario==='both'){await shelfRedesignCases(page,adapter,api,proof);await focusEditorCases(page,adapter,api,proof);await titleBoundsCases(page,adapter,api,proof);await sourceDetailCases(page,adapter,api,sourceBank);await availabilityFailures(page,adapter);await selectorCases(page,adapter,api,sourceBank,proof);await metadataCases(page,adapter,api);await pendingMutationCases(page,adapter,api,base);await sourceFenceCases(page,adapter,base);await shelfGenerationFenceCases(page,adapter,base);}
     if(fixture.enabled.length===2){
      await page.getByRole('tab',{name:'Bookmarks',exact:true}).focus();await page.keyboard.press('ArrowRight');await expect(page.getByRole('tab',{name:'Deliverables',exact:true})).toBeFocused();await expect(page.getByRole('tab',{name:'Deliverables',exact:true})).toHaveAttribute('aria-selected','true');
      if(adapter==='desktop'){

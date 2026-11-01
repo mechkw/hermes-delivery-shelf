@@ -97,7 +97,10 @@ export async function focusEditorCases(page,adapter,api,proof){
   await dialog.getByLabel(bookmarks?'Note':'Description',{exact:true}).fill('Short viewport saved by keyboard');
   const save=dialog.getByRole('button',{name:'Save changes',exact:true}),saveRect=await footerVisible(save);
   const scrolling=await dialog.evaluate(el=>[el,...el.querySelectorAll('*')].filter(n=>n.scrollHeight>n.clientHeight+1&&['auto','scroll'].includes(getComputedStyle(n).overflowY)).map(n=>({scrollTop:n.scrollTop,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight})));
-  expect(scrolling.some(s=>s.scrollTop>0)).toBe(true);
+  // Compact Shelf metadata edits can fit without scrolling. If content does
+  // overflow, the footer must be reachable through an actual scroll container.
+  if(scrolling.length)expect(scrolling.some(s=>s.scrollTop>0)).toBe(true);
+  else {await expect(save).toBeInViewport({ratio:1});await expect(cancel).toBeInViewport({ratio:1});}
   evidence.push({id,cancelRect,saveRect,scrolling});await writeFile(join(proof,`editor-focus-${adapter}.json`),JSON.stringify(evidence,null,2));
   await keyboardActivate(save);await expect(dialog).toHaveCount(0);
   const saved=await api(id,'/entries/'+entry.id);expect(saved[bookmarks?'note':'description']).toBe('Short viewport saved by keyboard');

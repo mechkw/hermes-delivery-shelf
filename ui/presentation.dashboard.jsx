@@ -1,4 +1,4 @@
-import React,{useId} from 'react';
+import React,{useId,useState} from 'react';
 const SDK=window.__HERMES_PLUGIN_SDK__;
 const C=SDK.components;
 export const Input=C.Input,DialogFooter=C.DialogFooter;
@@ -20,8 +20,17 @@ export function Choice({value='',onValueChange,onChange,children,options,id,disa
  // A surrounding semantic label labels its internal button without DOM edits.
  return <label className="hs-choice-label" onClick={event=>event.preventDefault()} onKeyDown={event=>{if(event.key==='Escape'&&event.currentTarget.querySelector('[role="listbox"]'))event.stopPropagation();}}><span className="hs-sr-only">{label||placeholder}</span><C.Select id={id} value={String(value)} placeholder={placeholder} disabled={disabled} onValueChange={v=>{onValueChange?.(v);onChange?.({target:{value:v}});}}>{items.filter(o=>!o.disabled||o.value===value).map(o=><C.SelectOption key={o.value} value={o.value}>{String(o.label)}</C.SelectOption>)}</C.Select></label>;
 }
+// Dashboard SDK has no public Tooltip. This local adapter provides hover,
+// keyboard focus and Escape semantics without private component imports.
+export function Hint({label,disabled,name,children}){
+ const id=useId(),[open,setOpen]=useState(false);
+ return <span className="hs-hint-anchor" tabIndex={disabled?0:undefined} aria-label={disabled?name+' unavailable':undefined} aria-describedby={disabled?id:undefined} onMouseEnter={()=>setOpen(true)} onMouseLeave={()=>setOpen(false)} onFocus={()=>setOpen(true)} onBlur={()=>setOpen(false)} onKeyDown={e=>{if(e.key==='Escape'&&open){e.preventDefault();e.stopPropagation();setOpen(false);}}}>
+  {React.cloneElement(children,{'aria-describedby':disabled?undefined:id})}
+  <span id={id} hidden={!open} data-state={open?'open':'closed'} role="tooltip" className="hs-dashboard-tooltip ds-dashboard-tooltip">{label}</span>
+ </span>;
+}
 export function Dialog({title,description='Review saved metadata. Your original source is not changed.',children,close,busy=false,restoreFocus}){
- return <C.Dialog open onOpenChange={open=>{if(!open&&!busy)close();}}><C.DialogContent className="hs-dashboard-dialog" onEscapeKeyDown={event=>{if(event.target.closest('[role="dialog"]')?.querySelector('[role="listbox"]'))event.preventDefault();}} showCloseButton={!busy} onCloseAutoFocus={restoreFocus}><C.DialogHeader><C.DialogTitle>{title}</C.DialogTitle><C.DialogDescription>{description}</C.DialogDescription></C.DialogHeader><div className="hs-dialog-body">{children}</div></C.DialogContent></C.Dialog>;
+ return <C.Dialog open onOpenChange={open=>{if(!open&&!busy)close();}}><C.DialogContent className="hs-dashboard-dialog" onEscapeKeyDown={event=>{if(event.target.closest('[role="dialog"]')?.querySelector('[role="listbox"],[role="tooltip"]:not([hidden])'))event.preventDefault();}} showCloseButton={!busy} onCloseAutoFocus={restoreFocus}><C.DialogHeader><C.DialogTitle>{title}</C.DialogTitle>{description&&<C.DialogDescription>{description}</C.DialogDescription>}</C.DialogHeader><div className="hs-dialog-body">{children}</div></C.DialogContent></C.Dialog>;
 }
 export function CollectionTabs({value,onChange,items,id}){
  return <C.Tabs defaultValue={value||''}>{()=> <C.TabsList role="tablist" aria-label="Saved collections">{items.map(f=><C.TabsTrigger key={f.id} value={f.id} active={value===f.id} role="tab" id={id+f.id} aria-controls={id+'panel'} aria-selected={value===f.id} tabIndex={value===f.id?0:-1} onClick={()=>onChange(f.id)} onKeyDown={e=>{

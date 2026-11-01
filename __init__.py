@@ -204,6 +204,11 @@ def _add_command(ctx, raw_args, *, session_id=None, session_key=None, platform=N
 def register(ctx):
     from .telegram_shelf import Controller, GUIDANCE
     api = _service()
+    if all(callable(getattr(ctx, name, None)) for name in ('register_auxiliary_task', 'on_unload')):
+        ctx.register_auxiliary_task(api.GENERATION_TASK, display_name='Delivery details',
+            description='Explicit file metadata draft from selected content and bounded history',
+            defaults=api.GENERATION_DEFAULTS)
+        api.bind_generation(ctx)
     controller = Controller(ctx, api)
     if callable(getattr(ctx, "on_unload", None)):
         ctx.on_unload(controller.close)

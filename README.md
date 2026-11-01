@@ -57,7 +57,9 @@ Start with a simple request:
 
 > “Add a Delivery Shelf entry called ‘Spring launch report,’ tagged launch and final, under the Website project.”
 
-You can add a metadata-only card immediately. To attach a file, use an approved root alias and a relative path—[see the file setup guide](docs/OPERATIONS.md#attach-a-file).
+In **Saved → Deliverables → Add delivery**, choose a conversation, then one of its delivered files. Optionally **Generate details**, review the title/description/tags, and explicitly save. Desktop shows artifact-style thumbnail cards; Dashboard keeps its existing collection view. [File selection, supported content and generation limits →](docs/DESKTOP_FILES.md)
+
+Metadata-only and legacy manual entries remain available under **More options**. Advanced explicit attachments still use an approved root alias and relative path—[see the file setup guide](docs/OPERATIONS.md#attach-a-file).
 
 Using Desktop on a different computer from your Hermes backend? [Install the appropriate halves on both machines](docs/OPERATIONS.md#remote-desktop-setups).
 
