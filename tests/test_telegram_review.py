@@ -67,8 +67,9 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry.origin.user_id, '18')
         identity = t.controller.identity(caller, entry.session_id, entry.session_key, 'telegram')
         self.assertIsNone(await t.controller.send(identity))
+        self.assertNotIn('Add', [row[0]['text'] for row in t.sent()[-1]['reply_markup']['inline_keyboard']])
         await t.click(next(reversed(t.controller.panels)), chat=-100)
-        self.assertIn('Nothing queued', t.edited()[-1]['text'])
+        self.assertIn('Shelf · Details', t.edited()[-1]['text'])
         for command in ('add', 'add Second --file workspaces:third.md'):
             answer = await asyncio.to_thread(t.ctx.commands['shelf'], command, source=caller,
                 session_id=entry.session_id, session_key=entry.session_key, platform='telegram')

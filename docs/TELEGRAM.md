@@ -8,8 +8,9 @@ performed for this verification.
 ## What the user sees
 
 On an authorized Telegram connection, `/shelf` sends a short **Shelf · N saved**
-message with genuine attached `InlineKeyboardMarkup`: **Add** first, up to five
-recent entries (each opens details), and **Browse more** last. Browse edits that
+message with genuine attached `InlineKeyboardMarkup`: **Add** first in private chats,
+up to five recent entries (each opens details), and **Browse more** last. Group/topic
+panels omit Add because assisted Add cannot safely run there on this host. Browse edits that
 same message; it does not replace the user's typing keyboard. There are no file
 uploads or filesystem browsing controls.
 
@@ -33,7 +34,7 @@ owner, profile and exact current session route/generation. The agent may fill on
 missing metadata. Earlier requests remain guarded for their related artifact sets;
 omitting a token is not a workaround, and a successful file claim cannot be replayed.
 
-**Group-chat limitation on v0.22.5:** clicking Add, bare `/shelf add`, or an
+**Group-chat limitation on v0.22.5:** Add is omitted from group/topic panels; bare `/shelf add` or an
 explicit-file command missing metadata refuses **before queueing** in Telegram
 groups/topics. The refusal explains that the host cannot safely bind the clicking
 owner and suggests a private chat or supplying all metadata. Fully specified saves,
@@ -51,8 +52,8 @@ current generation. The plugin does not weaken owner/session guards to hide this
    consumes the host-supplied PTB `Application` through
    `ctx.register_platform_handler`; it never opens a second bot or reads a token.
 2. Native panels require **in-process** plugin execution. If the operator chooses
-   `plugins.isolation: host`, the plugin retains text commands and reports that
-   inline panels are unavailable. Do not weaken isolation just to hide this limit.
+   `plugins.isolation: host`, the plugin retains a simple text list/search fallback.
+   Do not weaken isolation to obtain inline panels.
 3. Create the operator-owned file
    `<profile-home>/plugin-data/delivery-shelf/telegram-owners.json` containing a JSON
    array of the human owners' numeric Telegram IDs **as strings**, for example:
@@ -80,6 +81,37 @@ a person, remove them from this owner policy as well. Native callbacks have no
 public generic gateway authorization API. A group panel's visible text is visible
 to that group even though only the issuing owner can operate it; use a private chat
 for private catalog metadata.
+
+## Native handler reload caveat
+
+An offline reproduction against installed host commit
+`7b46bc10064d71951ef49734d762123bc0ac896b` proves that initial/late loading works,
+but force rediscovery on the same Telegram Application can detach Shelf's command
+from its native panel. `BasePlatformAdapter._wire_plugin_handlers` caches
+`(plugin_name, factory.__qualname__)`. Rediscovery unloads the first controller and
+registers a new controller with the same factory name; the adapter skips that new
+factory, leaving its `application` unset. A successful reload receipt or command
+registration does not establish working native callbacks. The core `/model`
+picker still works because it sends through the adapter's existing bot, not through
+the replaced plugin controller.
+
+`tests/native_telegram_lifecycle.py` reproduces this with the actual PluginManager,
+TelegramAdapter wiring, native dispatcher/task context, forum route, real PTB
+Application/Update, and captured Bot API transport. It verifies native `/model`
+markup during the failure and recovery after rebuilding the native Application,
+including owner/topic callback denial. This is a **host limitation characterization
+and recovery test**, not a claim that plugin hot reload was fixed.
+
+For affected hosts, finish installing the reviewed plugin version, then use an
+authorized **graceful restart of only its owning gateway** so native handlers bind
+at startup. A second force reload alone repeats the problem. Preserve owner policy,
+roots and isolation; do not borrow the adapter's private bot, rename factory keys
+to bypass host deduplication, or patch handler tables. Test `/shelf` and a browse
+button in the intended topic after restart before claiming live restoration.
+Until upstream supports replacing/removing native factory registrations safely,
+repeat that activation check after plugin rediscovery. No new file-send button or
+`dl`/`r3` text commands are implemented by this repair; downloads remain in the
+existing Desktop/Dashboard surface.
 
 ## Agent-driven derivative offers
 

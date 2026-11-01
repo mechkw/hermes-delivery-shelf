@@ -99,12 +99,19 @@ def main():
                 entry = registry[name]
                 assert entry['description'] == description and len(description) <= 40
                 assert entry['argument_mode'] == 'text'
-                assert entry['args_hint'].startswith('[') and '--description' in entry['args_hint']
+                assert entry['args_hint'].startswith('[')
+                if name == 'shelf':
+                    assert '--file' not in entry['args_hint']
+                else:
+                    assert '--description' in entry['args_hint']
                 assert 'help' in entry['args_hint']
                 metadata[name] = {key: entry[key] for key in ('description', 'args_hint', 'argument_mode')}
                 handler = get_plugin_command_handler(name)
                 assert callable(handler)
                 reply = invoke_plugin_command(handler, 'help', platform='telegram')
+                if name == 'shelf':
+                    assert '/shelf search <query>' in reply and '--file' not in reply
+                    reply = invoke_plugin_command(handler, 'help advanced', platform='telegram')
                 for part in (f'/{name} help', 'missing', 'current', '--description', 'groups', 'queued is not saved'):
                     assert part in reply, (name, part, reply)
                 if name == 'shelf':

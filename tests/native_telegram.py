@@ -153,7 +153,8 @@ async def main():
             assert not manager.get_platform_handler_factories('telegram')
             handler = manager._plugin_commands['shelf']['handler']
             result = await asyncio.to_thread(invoke_plugin_command, handler, '', platform='telegram')
-            assert 'Inline panels unavailable' in result, result
+            assert 'Delivery Shelf' in result and '/shelf search <query>' in result, result
+            assert 'Inline panels unavailable' not in result and '--file' not in result
             print('PASS real isolated plugin host: loads text command, no native factories, honest inline fallback')
         finally:
             manager.unload()

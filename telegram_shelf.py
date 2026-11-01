@@ -224,7 +224,10 @@ class Controller:
             key = str(len(actions))
             actions[key] = action
             rows.append([InlineKeyboardButton(label, callback_data=f'shelf:{token}:{key}')])
-        row('Add', ('add', None))
+        # This host cannot safely admit assisted Add from a shared group.
+        # Keep the text command's refusal, but do not offer a dead-end button.
+        if not panel.identity['chat'].startswith('-'):
+            row('Add', ('add', None))
         if detail:
             entry = self.api.Store(self.home).get(detail)
             text = ('Shelf · Details\n' + entry['title'] + '\n' + entry['description'][:1800] +

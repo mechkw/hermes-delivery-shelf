@@ -266,11 +266,16 @@ def register(ctx):
                     controller.requests.pop(request, None)
             return result
         if text == "help":
+            return ('/shelf — browse saved deliveries\n'
+                    '/shelf search <query> — find a saved delivery\n'
+                    'Use Desktop or Dashboard to add, download or edit entries.\n'
+                    '/shelf help advanced — manual saves and setup details')
+        if text == "help advanced":
             return ('/shelf — Telegram inline panel (when available); otherwise text list\n'
                     '/shelf <query> or /shelf search <query> — search saved deliveries\n'
                     '/shelf add — request the most recent delivered artifact(s) in this conversation; same as panel Add\n'
                     '/shelf add [title] [#tag1, tag2] --file <root:path> [--description "text"] — choose an explicit file\n'
-                    '/shelf help — show this syntax without saving\n'
+                    '/shelf help advanced — show this syntax without saving\n'
                     'Files must exist in an approved root; quote file references containing spaces. '
                     'Bare Add never scans folders and asks if the intended artifact is unclear.\n'
                     'The current agent fills only missing title, tags and description, then saves and verifies. '
@@ -291,15 +296,13 @@ def register(ctx):
             return "Delivery Shelf: " + result["error"]
         data = result["data"]
         lines = [f"Delivery Shelf — {data['total']} matching deliveries"]
-        if not raw_args.strip() and platform == "telegram":
-            lines.append("Inline panels unavailable on this host/connection; explicit text commands remain available.")
-        lines.extend(f"• {item['title']} [{item['kind']}] — {item['id']}" for item in data["items"])
-        lines.append('Add: /shelf add [title] [#tags] --file <root:path> [--description "text"]\nUse Dashboard or Desktop to edit, preview or remove entries.')
+        lines.extend(f"• {item['title']} [{item['kind']}]" for item in data["items"])
+        lines.append('/shelf search <query> — find a saved delivery\n/shelf help — more options')
         return "\n".join(lines)
     # Optional-leading hint keeps bare invocation eligible for the native Telegram menu.
     # Keep description <=40 characters: the host truncates plugin menu descriptions.
     ctx.register_command(
         "shelf", command, description="Browse/add deliveries; /shelf help",
-        args_hint='[query | search <query> | add | add [title] [#tag1, tag2] --file <root:path> [--description "text"] | help]',
+        args_hint='[query | search <query> | add | help]',
         argument_mode="text",
     )

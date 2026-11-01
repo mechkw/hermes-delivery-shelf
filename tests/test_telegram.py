@@ -139,6 +139,13 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
                                             {'id':self.entry['id'], 'file':{'root':'workspaces','path':path}})
         return json.loads(result)
 
+    async def test_group_panel_offers_browsing_not_unsupported_add(self):
+        self.source.chat_id = '-100'
+        await self.panel()
+        labels = [row[0]['text'] for row in self.sent()[-1]['reply_markup']['inline_keyboard']]
+        self.assertNotIn('Add', labels)
+        self.assertIn('Fictional report', labels)
+
     async def test_actual_markup_order_topic_details_and_paging(self):
         for i in range(7): self.store.create(plugin._service().EntryInput(title=f'Fixture {i}'))
         token = await self.panel()

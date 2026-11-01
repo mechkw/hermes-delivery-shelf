@@ -59,6 +59,17 @@ class CommandTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         return result["data"]
 
+    def test_ordinary_help_and_fallback_are_simple(self):
+        for text in ('', 'help', 'search absent'):
+            reply = self.command(text)
+            self.assertIn('/shelf search <query>', reply)
+            for advanced in ('Inline panels unavailable', 'root:path', '--file', 'allow_gateway_injection', '/shelf dl', '/shelf r3'):
+                self.assertNotIn(advanced, reply)
+        advanced = self.command('help advanced')
+        self.assertIn('--file <root:path>', advanced)
+        self.assertIn('groups/topics', advanced)
+        self.assertEqual(self.ctx.injected, [])
+
     def test_mixed_case_supplied_metadata_direct_save(self):
         reply = self.command('add OpsCase #Keep-Tag, keep-tag, Équipe, équipe --description "Exact description." --file "workspaces:approved image.png"')
         self.assertIn('Saved', reply)

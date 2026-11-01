@@ -14,5 +14,6 @@ mkdir -p "$TMPDIR"
 "${PYTHON:-python}" tests/native_contract.py
 "${PYTHON:-python}" tests/native_command_discovery.py
 "${PYTHON:-python}" tests/native_telegram.py
+"${PYTHON:-python}" tests/native_telegram_lifecycle.py
 npm run build
 npm run test:browser
