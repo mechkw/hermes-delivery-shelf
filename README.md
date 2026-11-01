@@ -95,19 +95,21 @@ From chat, use:
 
 ```text
 /shelf launch
-/shelf add --file workspaces:launch/report.pdf
+/shelf add
 /shelf add Spring launch report #launch, final --description "Approved launch summary." --file workspaces:launch/report.pdf
 ```
 
 `/shelf <query>` searches. On configured Telegram connections, bare `/shelf` opens
 an attached inline panel: **Add**, recent entries, then **Browse more**.
-On Telegram, `/shelf add` saves a recent file from this conversation **without a
-model call**, in private chats and groups/topics. One file saves immediately;
-several files open a chooser. An already-saved file keeps its existing card and
-metadata. The filename supplies the default title; tags and description stay empty
-unless you provide them. If no recent file is available, ask Hermes to save it in
-normal chat. Add recognizes explicit `MEDIA:` file references in the active part
-of this conversation, not older compressed history or arbitrary links.
+`/shelf add` saves one recent file **without a model call or injection permission**
+on Desktop, TUI, CLI, API-server commands and authorized Telegram chats/topics.
+Bare `/shelf` only browses. Several recent files open Telegram's native chooser;
+on other clients, use **Saved → Delivery Shelf → Add** to choose the file.
+An already-saved file keeps its existing card and metadata. The filename supplies
+the default title; tags and description stay empty unless you provide them.
+Add recognizes explicit `MEDIA:` file references in the active part of this
+conversation, not older compressed history or arbitrary links. If no reference
+is found, use the Saved picker instead; no agent handoff is attempted.
 [Telegram owner policy, source limits, and derivative offers →](docs/TELEGRAM.md)
 
 Use the advanced `--file` command to choose an exact existing file instead. In that

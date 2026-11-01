@@ -16,6 +16,7 @@ mkdir -p "$TMPDIR"
 "${PYTHON:-python}" tests/native_command_discovery.py
 "${PYTHON:-python}" tests/native_telegram.py
 "${PYTHON:-python}" tests/native_recent_add.py
+"${PYTHON:-python}" tests/native_multisurface_add.py
 "${PYTHON:-python}" tests/native_downloads.py
 "${PYTHON:-python}" tests/native_telegram_lifecycle.py
 npm run build

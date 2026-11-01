@@ -6,12 +6,12 @@
 - `/shelf <query>` or `/shelf search <query>`: search saved delivery metadata. Use `/shelf search help` or `/shelf search add` to search reserved words.
 - `/shelf dl <number>` or `/shelf download <number>`: send that item from your last numbered result/page, valid for ten minutes and scoped to your user/chat/topic/profile/session. No model call.
 - `/shelf r3`: send up to three most recently updated attached entries; `r1`–`r5` supported. Missing files count as unavailable, with no replacement or automatic retry.
-- `/shelf add [title] [#tags] [--description "text"]`: on Telegram, save a recent file from this conversation without a model call, exactly like panel **Add**. One file saves immediately; several files open a chooser with Cancel. Existing registrations keep their metadata. No recent file? Ask Hermes to save it in normal chat.
+- `/shelf add [title] [#tags] [--description "text"]`: save one recent file from the invoking conversation without a model or injection permission on Desktop, TUI, CLI, API-server commands and authorized Telegram chats/topics. Several files open a native Telegram chooser with Cancel; other clients point to **Saved → Delivery Shelf → Add** to select a file. Existing registrations keep their metadata. Missing context or files never trigger an agent handoff.
 - `/shelf add [title] [#tag1, tag2] --file <root:path> [--description "text"]`: select an exact existing file under an approved root. Quote file references containing spaces. Title/tags precede options.
 - `/shelf help`: short browsing/search help, without setup jargon or manual file syntax; does not save.
 - `/shelf help advanced`: full manual-save syntax and limitations; works without session metadata or handoff consent.
 
-Ordinary Telegram Add defaults to the filename as title and empty tags/description;
+Ordinary Add defaults to the filename as title and empty tags/description;
 it preserves any supplied fields. It recognizes explicit `MEDIA:` references in the
 active conversation segment, not compressed/ancestor history or arbitrary links.
 See [source limits](DETERMINISTIC_ADD.md). For the advanced `--file` workflow only,

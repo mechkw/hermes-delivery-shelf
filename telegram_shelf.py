@@ -659,6 +659,84 @@ class Controller:
             if request:
                 return self.new_request(panel.identity)
 
+    def _prepare_text_add(self, identity, raw, epoch, cancelled):
+        """Native command consent, independent of PTB and metadata inference."""
+        from .recent_artifacts import recent, candidates, metadata, supplied_metadata, MISSING
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+        import sqlite3
+        commit_authorized = False
+
+        def failure(detail):
+            if commit_authorized:
+                return 'Unable to confirm the save. Open Saved → Delivery Shelf to check before retrying.'
+            # Source-adapter errors retain their cause without steering an ordinary
+            # deterministic command into a model-assisted save.
+            detail = str(detail).replace('Ask me to save the file in normal chat.',
+                'Open Saved → Delivery Shelf → Add to choose a file from this conversation.')
+            return 'Delivery Shelf not saved: ' + detail
+
+        def authorize():
+            home = self.api.bound_home()
+            with self.lock:
+                if (home != self.home or identity['profile'] != self.profile or not self.alive or
+                        self.session_fenced or self.epoch != epoch or cancelled.is_set() or
+                        identity['session_id'] in self.retired_sessions):
+                    raise ValueError('Conversation or profile changed. Reopen the conversation and use /shelf add again.')
+
+        try:
+            authorize()  # Before any source/catalog query, not just before the write.
+            if (identity['platform'] not in ('cli', 'desktop', 'tui', 'local', 'api_server') or
+                    not isinstance(identity['session_id'], str) or
+                    not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', identity['session_id']) or
+                    (identity['platform'] != 'cli' and not identity['session_key'])):
+                raise ValueError('Current conversation unavailable. Open a conversation and use /shelf add, or choose a file in Saved → Delivery Shelf.')
+            supplied = supplied_metadata(raw)
+            delivery = recent(self.home, self.profile, identity['session_id'])
+            authorize()
+            if delivery is None:
+                raise ValueError(MISSING)
+            refs = candidates(self.api, self.home, delivery)
+            entries = [metadata(self.api, ref, identity['session_id'], supplied) for ref in refs]
+            authorize()
+            if len(entries) != 1:
+                # Host text returns have no native message receipt. Do not publish
+                # numbered choices or fabricate a --file command for the user.
+                return ('Several recent files found. Nothing saved. '
+                        'Open Saved → Delivery Shelf → Add and choose the file from this conversation.')
+
+            def authorize_commit():
+                nonlocal commit_authorized
+                # register_file_once holds the catalog reservation. Recheck the
+                # source identity and current root policy after any SQLite wait.
+                authorize()
+                current = recent(self.home, self.profile, identity['session_id'], cutoff=delivery.cutoff)
+                authorize()
+                if current != delivery or candidates(self.api, self.home, current) != refs:
+                    raise ValueError('Recent delivery changed. Use /shelf add again.')
+                authorize()
+                commit_authorized = True
+
+            item, existing = self.api.Store(self.home).register_file_once(entries[0], authorize_commit=authorize_commit)
+            authorize()  # No metadata disclosure after a profile/lifecycle change.
+            return ('Already saved to Delivery Shelf: ' if existing else 'Saved to Delivery Shelf: ') + item['title']
+        except ValidationError:
+            return failure('recent file or metadata is unsupported by the current policy.')
+        except HTTPException as exc:
+            return failure(exc.detail)
+        except ValueError as exc:
+            return failure(exc)
+        except (OSError, sqlite3.Error):
+            return 'Unable to confirm the save. Open Saved → Delivery Shelf to check before retrying.'
+
+    async def add_recent_text(self, identity, raw='', epoch=None):
+        cancelled = threading.Event()
+        try:
+            return await asyncio.to_thread(self._prepare_text_add, identity, raw, epoch, cancelled)
+        except asyncio.CancelledError:
+            cancelled.set()  # Cancellation does not stop a worker waiting for SQLite.
+            raise
+
     def _load_recent(self, panel):
         from .recent_artifacts import recent, candidates, metadata, MISSING
         delivery = recent(self.home, self.profile, panel.identity['session_id'])
@@ -729,7 +807,7 @@ class Controller:
                 if len(panel.candidates) == 1:
                     text, markup = self._save_recent(token, panel, 0)
                 elif self.application is None:
-                    raise ValueError('Several recent files found. Ask me to save the selected file in normal chat.')
+                    raise ValueError('Several recent files found. Nothing saved. Open Saved → Delivery Shelf → Add and choose the file from this conversation.')
                 else:
                     text, markup = self._choose_recent(token, panel)
                 panel.busy = False
