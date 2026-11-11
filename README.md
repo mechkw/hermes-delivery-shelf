@@ -1,184 +1,157 @@
-<p align="center"><img src="docs/assets/icon.png" width="80" alt="Delivery Shelf icon"></p>
+# Delivery Shelf
 
-<h1 align="center">Delivery Shelf</h1>
-<p align="center"><strong>Keep the work. Skip the hunt.</strong></p>
-<p align="center">A curated home for the reports, images, and other outputs you want to find again—in Hermes Desktop and the web Dashboard.</p>
+**Keep the work. Skip the hunt.**
 
-<p align="center">
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#what-belongs-on-your-shelf">What it does</a> ·
-  <a href="docs/OPERATIONS.md">Setup & troubleshooting</a> ·
-  <a href="docs/TECHNICAL.md">Technical guide</a>
-</p>
+Contest candidate. [Verified workflows and known issues](docs/RELEASE_STATUS.md).
 
-![Delivery Shelf — a winged messenger handing off finished work, with fractured cream-and-gold lettering and digital halftone texture](docs/assets/hero.webp)
+Save the files Hermes delivers, keep related files together, and return to the version you meant. Delivery Shelf gives finished work a home outside the chat scroll.
 
-**Your conversations move on. Your finished work shouldn't disappear into them.**
+[Install](docs/INSTALLATION.md) · [Usage guide](docs/USAGE.md) · [Commands](docs/COMMANDS.md) · [Security](SECURITY.md)
 
-Delivery Shelf gives deliberately saved outputs a title, a project, and a few useful tags. Find a report by what it was for, not by the filename you half remember. Edit its description. Preview a text file. Download an allowed attachment. Remove the card when you no longer need it—without deleting the original file.
+![Delivery Shelf banner in the Signal Cut art style](docs/assets/hero.webp)
 
-No background folder sweeps. No second cloud account. Your existing Hermes agent can fill in the details when you save.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/mark-on-dark.png">
+  <img src="docs/assets/mark-on-light.png" alt="Delivery Shelf logo: retained documents on a shelf" width="104" height="104">
+</picture>
 
-## Quick start
+## Watch it work
+
+[Delivery Shelf launch film · 36 seconds](docs/assets/launch.mp4) · [Both plugins together · 42 seconds](docs/assets/saved-together.mp4)
+
+Real dark-mode native screens, fictional Northstar work. The films cut between captured states rather than simulate a continuous recording.
+
+## Keep the handoff, not the whole folder
+
+A report and its charts belong together. So do a presentation and its supporting spreadsheet. Save that handoff as one **delivery**, with a useful title, description, tags, and project.
+
+Delivery Shelf preserves copies of attached files. When you deliberately save another version, the earlier files remain available. Renaming or removing an original does not remove an already-preserved copy.
+
+Use it for:
+
+- A client handoff with several related files.
+- A report you need to retrieve next week without remembering its filename.
+- An image you chose to keep, rather than every image generated along the way.
+- A revised deliverable whose previous edition still matters.
+
+Nothing joins the Shelf just because Hermes created it. The first save is your choice.
+
+## Install
 
 ### Native Hermes Desktop
 
-In the installed app, open **Capabilities → Plugins → Install from Git** and enter:
+Open **Capabilities → Plugins → Install from Git** and enter:
 
 ```text
 https://github.com/mechkw/hermes-delivery-shelf
 ```
 
-Select the intended backend/profile, review the normal installation consent, and
-verify that **both Agent and Desktop are enabled**. Open **Saved → Deliverables**.
-The Desktop UI lives on the app computer; the Agent half and data live on the
-selected backend. A server-only install followed by Rescan is not enough for a
-remote client. [Existing backend or “unavailable (remote backend)”? →](docs/OPERATIONS.md#remote-desktop-setups)
+Choose the intended backend and profile, review installation permissions, and enable both the **Agent** and **Desktop** halves. Open **Saved → Deliverables**.
 
-### Web Dashboard or backend-only installation
+### Backend or web Dashboard
 
-Run on the backend that owns your data:
+Run on the backend that owns your Hermes profile:
 
 ```sh
 hermes plugins install mechkw/hermes-delivery-shelf --enable
 hermes plugins list
 ```
 
-Refresh the authenticated **Dashboard** after its plugin routes are loaded; if
-needed, restart only that Dashboard server. Open **Saved → Deliverables**. The
-Dashboard also adapts to phones and tablets; no separate mobile app is required.
+Use the installer's activation result to check whether anything still needs a reload. The native Desktop UI is a separate client component; a backend-only install does not install that UI on another computer.
 
-**Browser-hosted Desktop is a different host from the web Dashboard.** The
-currently inspected Hermes browser bridge does not load these external Desktop
-plugins. Use native Desktop or the Dashboard for the Saved panel; backend tools
-can still work without that panel.
+[Full installation guide](docs/INSTALLATION.md), including remote backends and the distinction between native Desktop, browser-hosted Desktop, and the web Dashboard.
 
-Start with a simple request:
+## Save your first delivery
 
-> “Add a Delivery Shelf entry called ‘Spring launch report,’ tagged launch and final, under the Website project.”
-
-In **Saved → Deliverables → Add delivery**, choose a conversation, then one of its delivered files. Optionally **Generate details**, review the title/description/tags, and explicitly save. Desktop shows artifact-style thumbnail cards; Dashboard keeps its existing collection view. [File selection, supported content and generation limits →](docs/DESKTOP_FILES.md)
-
-Metadata-only and legacy manual entries remain available under **More options**. Advanced explicit attachments still use an approved root alias and relative path—[see the file setup guide](docs/OPERATIONS.md#attach-a-file).
-
-Using Desktop on a different computer from your Hermes backend? [Install the appropriate halves on both machines](docs/OPERATIONS.md#remote-desktop-setups).
-
-## What belongs on your shelf?
-
-- **The finished report** you will need at the next meeting.
-- **The selected image** rather than the entire generation folder.
-- **The useful handoff** with enough description to recognize it next week.
-- **A project milestone** that deserves a name, a date, and a place to return to.
-
-This is a deliberately curated catalog, not a filesystem browser. Ordinary drafts, temporary screenshots, and every intermediate tool output do not appear unless you choose to register them.
-
-### One collection, two native views
-
-![Delivery Shelf in the Dashboard with fictional example entries](docs/assets/dashboard.png)
-
-<details>
-<summary><strong>Desktop and a phone-sized Dashboard</strong></summary>
-
-![Delivery Shelf rendered through the Desktop plugin loader](docs/assets/desktop.png)
-
-<img src="docs/assets/mobile.png" width="360" alt="Delivery Shelf Dashboard at a mobile viewport width">
-
-The example entries are fictional. Desktop validation scope and host compatibility are recorded in the [technical guide](docs/TECHNICAL.md#compatibility-and-verification).
-
-</details>
-
-## Find it without retracing the conversation
-
-Search titles and descriptions, then narrow the results by tag, kind, or project. Each entry keeps its registration and update dates. Changes use revision checks so an older editor cannot silently overwrite a newer save.
-
-From chat, use:
+After Hermes delivers files in the current conversation, enter:
 
 ```text
-/shelf launch
 /shelf add
-/shelf add Spring launch report #launch, final --description "Approved launch summary." --file workspaces:launch/report.pdf
 ```
 
-`/shelf <query>` searches. On configured Telegram connections, bare `/shelf` opens
-an attached inline panel: **Add**, recent entries, then **Browse more**.
-`/shelf add` saves one recent file **without a model call or injection permission**
-on Desktop, TUI, CLI, API-server commands and authorized Telegram chats/topics.
-Bare `/shelf` only browses. Several recent files open Telegram's native chooser;
-on other clients, use **Saved → Delivery Shelf → Add** to choose the file.
-An already-saved file keeps its existing card and metadata. The filename supplies
-the default title; tags and description stay empty unless you provide them.
-Add recognizes explicit `MEDIA:` file references in the active part of this
-conversation, not older compressed history or arbitrary links. If no reference
-is found, use the Saved picker instead; no agent handoff is attempted.
-[Telegram owner policy, source limits, and derivative offers →](docs/TELEGRAM.md)
+This saves the latest recognized delivery set. If that handoff contains several files, they stay together. To save only the newest file instead:
 
-Use the advanced `--file` command to choose an exact existing file instead. In that
-workflow, your current Hermes agent fills omitted title, tags or description and
-verifies the save; fully supplied metadata saves directly. Anything you supply takes precedence. Tags keep their first spelling/case, with boundary
-whitespace trimmed and case-insensitive duplicates removed. Tag filtering remains
-case-insensitive. There is no metadata questionnaire.
+```text
+/shelf add r1
+```
 
-Tags are comma-separated after `#`; use `--description "text"` to set the description.
-Quote file references containing spaces. Supplying all details saves directly without
-a model turn. Agent-assisted chat commands need Hermes’s [one-time handoff permission](docs/OPERATIONS.md#enable-agent-assisted-metadata).
-Use `/shelf search add` to search for the word “add.”
+Missing title, description, and tags use your configured model when metadata generation is enabled. Supplied details take precedence. Wait for the saved confirmation. If confirmation fails, inspect **Saved → Deliverables** before retrying; the save may already have completed. See [save-confirmation troubleshooting](docs/INSTALLATION.md#check-a-save-after-an-interrupted-confirmation).
 
-Or ask Hermes:
+Prefer to choose first? In native Desktop, use the **Plus → Delivery Shelf** entry or **Saved → Deliverables → Add delivery**. Choose a conversation, select delivered files, enter details or generate a draft, then select **Save**. Generating a draft does not save it.
 
-> “Find the final reports in my Delivery Shelf for the Website project.”
+## Browse the way the work makes sense
 
-Want a correction? Ask Hermes to change the saved title, tags or description; it updates the existing entry rather than making another card. Native tools are `delivery_shelf_register`, `delivery_shelf_search`, `delivery_shelf_update`, and `delivery_shelf_offer_update`. The last offers a new derivative for approval; same-file edits stay silent. Removal remains in the UI. [Structured examples and API details →](docs/TECHNICAL.md)
+Native Desktop has three browsing views:
 
-### Retrieve a file in Telegram
+| View | Best for |
+| --- | --- |
+| **Together** | Browse grouped deliveries and their companion files. |
+| **Library** | Scan a compact file list with an adjacent inspector. |
+| **Gallery** | Recognize files by thumbnail or file-type icon. |
 
-Open `/shelf`, select an entry, and tap **Send file**. Or use `/shelf dl 1`
-(`/shelf download 1`) for item 1 of your last numbered list, valid for ten minutes.
-`/shelf search <query>` narrows that list. `/shelf r3` sends up to three recent
-attached deliveries; `r1` through `r5` are supported. Missing files are reported,
-not replaced with guesses. Retrieval needs **no model call** or agent-handoff consent.
-Native transport and the owner policy are required; Desktop/Dashboard remain the
-fallback. ZIP files are opaque attachments, never unpacked or previewed.
+Previewing a file and selecting a delivery are separate actions. Checkboxes select the **whole delivery**, including its files and saved versions, for cleanup.
 
-## Files stay where they belong
+Open a delivery to inspect its files, switch versions, download a preserved copy, edit metadata, or add a version. Source details retain the original path and conversation association where that provenance is available.
 
-The shelf stores **metadata and a reference**, not another copy of the original file. Optional file access is intentionally narrow:
+![Delivery Shelf in dark-mode Hermes Desktop, showing the fictional Northstar launch kit with its PDF and cover image preserved together](docs/assets/dark-together.png)
 
-- Only operator-approved roots and supported file types.
-- No hidden paths, traversal, symlinks, or obvious credential/configuration filenames.
-- Plain-text previews for text, Markdown, and CSV; Markdown is shown as text, not executed HTML.
-- Downloads capped at 10 MiB.
-- Removing an entry removes its metadata, **never the source file**.
+*Together view in the installed native app. Northstar is fictional demonstration content.*
 
-A moved or deleted file may make its attachment unavailable. The card can still be edited or removed. This is a catalog, not a backup service.
+![Dark-mode Library with the Northstar delivery selected and cover.png open in the adjacent inspector](docs/assets/dark-library.png)
 
-## Privacy, without a mystery tour
+*The checkboxes select one delivery and both companion files. The inspector previews cover.png independently.*
 
-- **Profile-local:** each backend profile has its own catalog.
-- **Explicit:** no automatic transcript capture or folder scanning.
-- **Host-authenticated:** the UI uses Hermes's existing authentication and backend routes.
-- **No plugin telemetry:** no analytics service or remote index. Assisted saves use your existing Hermes agent/provider; the plugin has no separate model client.
-- **Persistent:** plugin data survives ordinary updates and uninstall; removing the package is not data erasure.
+## Keep revisions without making every save automatic
 
-“Local” means local to your Hermes backend, which can be a remote server. Other software running under the same OS account is not sandboxed by this plugin. [Storage, retention, backup, and removal →](docs/OPERATIONS.md#storage-and-retention)
+Use **Add version** when you want to save a new edition of an existing delivery. A version is a preserved set of files, not a link to whatever happens to occupy the original paths later.
 
-## Built to fit Hermes
+Hermes can also offer a concrete new version of a delivery you already saved. You can approve that version, keep the current one, or choose **Always for this delivery**. That permission applies to the named saved delivery only. It never authorizes first saves or a global folder watcher.
 
-Delivery Shelf is an independent community plugin, not a core fork. It contributes its own page and tools without replacing your chat or changing normal replies. Dashboard and Desktop get their own native adapters, backed by the same small catalog service.
+The delivery's details show **Ask first**, **Always for this delivery**, or a paused state. Use **Ask before next version** to revoke standing approval. Automatic version updates pause outside Active.
 
-For us, Hermes is the best platform for turning agent work into something useful beyond a single chat. Delivery Shelf gives that work somewhere to land.
+## Clear space without deleting your originals
 
-## Command discovery
+- **Archive** keeps deliveries indefinitely and out of the active collection.
+- **Trash** keeps deliveries recoverable for the configured 30 or 60 days.
+- **Empty Trash** starts a separate 60-minute recovery window in **Pending deletion**.
 
-`/shelf help` shows full syntax. Native Telegram menus use the plugin registry,
-but menu priority may be needed to survive the host cap. On official Hermes v0.22.5,
-global gateway `/help` and `/commands` omit plugin commands entirely; registering
-argument hints cannot fix that host gap. [Menu setup, syntax and verified limitations →](docs/COMMANDS.md)
+After the recovery deadline, cleanup can permanently delete Shelf's preserved copies and versions. Original working files are never the cleanup target. Changing retention also changes deadlines for items already in Trash.
 
-## Go deeper
+Native plugin settings include browsing defaults, date and timezone display, metadata generation, cleanup, and storage usage. [Manage deliveries and recovery](docs/USAGE.md#manage-deliveries-and-recovery).
 
-- [Setup, approved file roots, remote hosts, and troubleshooting](docs/OPERATIONS.md)
-- [API, storage, security boundaries, architecture, and verification](docs/TECHNICAL.md)
-- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
-- Companion project: [Conversation Bookmarks](https://github.com/mechkw/hermes-conversation-bookmarks)—for the part of the conversation you want to keep.
+## Find or retrieve work from chat
 
-MIT licensed. Created by [Ken Watts](https://github.com/mechkw).
+```text
+/shelf
+/shelf search launch
+/shelf help
+```
+
+Bare `/shelf` browses; `/shelf add` saves. On configured Telegram connections, the native panel includes delivery actions and file sending. `/shelf r3` retrieves the primary attachment from the **third** most recently saved delivery, not three deliveries. File retrieval does not call a model.
+
+[Command reference](docs/COMMANDS.md) covers recent-file selectors, advanced explicit-file saves, Telegram setup, and source limits.
+
+## Privacy and file boundaries
+
+The catalog and preserved files live in the selected Hermes **backend profile**. A remote backend means the data is on that server, not necessarily on your laptop.
+
+- No automatic first capture, background folder scan, plugin analytics service, or remote Shelf index.
+- Only approved roots and supported file types can be attached. Individual files are limited to 10 MiB.
+- Explicit metadata generation sends bounded selected-file content and conversation context through Hermes's configured provider. Browse and download do not need that model call.
+- Older **Original-file link** entries still need their sources. A **Preserved copy** is stored by Shelf.
+
+Shelf preserves selected deliverables; it is not a transcript backup, filesystem backup, or encrypted vault. [Storage, generation, and privacy details](docs/USAGE.md#storage-and-privacy).
+
+## Better together, still independent
+
+[Conversation Bookmarks](https://github.com/mechkw/hermes-conversation-bookmarks) keeps the conversation or response reference behind a useful decision. Delivery Shelf keeps the resulting files. Install either alone, or use both under **Saved** with separate **Deliverables** and **Bookmarks** tabs.
+
+## Help and project links
+
+- [Usage guide](docs/USAGE.md) and [command reference](docs/COMMANDS.md).
+- [Installation and troubleshooting](docs/INSTALLATION.md).
+- [Technical reference](docs/TECHNICAL.md), [changelog](CHANGELOG.md), and [contributing](CONTRIBUTING.md).
+- [Report a bug](https://github.com/mechkw/hermes-delivery-shelf/issues). Remove private titles, paths, and conversation text from reports.
+- Report vulnerabilities privately using the channel in [SECURITY.md](SECURITY.md). If GitHub private reporting is unavailable, email **repobugs@virtuedev.com**. Do not post a vulnerability publicly.
+
+An independent community plugin for [Hermes Agent](https://hermes-agent.nousresearch.com/docs/). [MIT license](LICENSE).

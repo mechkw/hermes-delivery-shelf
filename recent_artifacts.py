@@ -28,6 +28,7 @@ class Delivery:
     cutoff: int
     digest: str
     paths: tuple[str, ...]
+    origins: tuple['Delivery', ...] = ()
 
 
 @contextmanager
@@ -103,7 +104,9 @@ def explicit_paths(content):
     return tuple(paths)
 
 
-def recent(home, profile, session_id, *, cutoff=None):
+def recent(home, profile, session_id, *, cutoff=None, count=None):
+    if count is not None and (type(count) is not int or not 1 <= count <= MAX_FILES):
+        raise ValueError(f'Use /shelf add r1 through r{MAX_FILES}. Nothing saved.')
     if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', session_id):
         raise ValueError('No current conversation. Ask me to save the file in normal chat.')
     with connection(home) as conn:
@@ -118,13 +121,27 @@ def recent(home, profile, session_id, *, cutoff=None):
             AND COALESCE(display_kind,'')='' AND COALESCE(observed,0)=0
             AND COALESCE(_compressed_summary,0)=0 AND COALESCE(tool_calls,'') IN ('','[]','null')
             ORDER BY id DESC LIMIT ?''', (CONTENT_BYTES, session_id, cutoff, WINDOW))
+        selected, origins = [], []
         for row in rows:
             # Do not silently skip a newer oversized answer to save an older file.
             if row['content'] is None:
                 raise ValueError('Recent delivery is too large to inspect. Ask me to save the file in normal chat.')
             paths = explicit_paths(row['content'])
             if paths:
-                return Delivery(row['id'], cutoff, hashlib.sha256(row['content'].encode()).hexdigest(), paths)
+                origin = Delivery(row['id'], cutoff, hashlib.sha256(row['content'].encode()).hexdigest(), paths)
+                if count is None:
+                    return origin
+                # Newer rows first; within one answer the last MEDIA marker is
+                # newest. Deduplicate exact references without scanning folders.
+                for path in reversed(paths):
+                    if path not in selected:
+                        selected.append(path)
+                        if origin not in origins:
+                            origins.append(origin)
+                    if len(selected) == count:
+                        return Delivery(origins[0].row, cutoff, origins[0].digest, tuple(selected), tuple(origins))
+    if selected:
+        raise ValueError(f'Only {len(selected)} recent files found; requested {count}. Nothing saved.')
     return None
 
 
@@ -155,6 +172,23 @@ def metadata(api, ref, session_id, supplied=None):
     image = Path(name).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}
     return api.EntryInput.model_validate(dict(title=name[:160], description='', tags=[], project='',
         kind='image' if image else 'document', file=ref, session_id=session_id) | (supplied or {}))
+
+
+def generation_request(api, delivery, ref, session_id):
+    """Map the pinned MEDIA row to the shared ArtifactOrigin contract.
+
+    The shared resolver independently checks row eligibility, digest, exact ref,
+    profile and conversation lineage; constructing an identity is not admission.
+    """
+    if delivery.origins:
+        absolute = str(api.allowed_roots(api.bound_home())[ref['root']] / ref['path'])
+        delivery = next((origin for origin in delivery.origins if absolute in origin.paths), None)
+        if delivery is None:
+            raise ValueError('Recent file origin changed. Nothing saved.')
+    identity = hashlib.sha256(json.dumps(
+        [session_id, delivery.row, delivery.digest, ref], sort_keys=True).encode()).hexdigest()
+    return api.GenerationRequest(session_id=session_id, source=api.ArtifactOrigin(
+        message_id=delivery.row, digest=delivery.digest, artifact_id=identity))
 
 
 def supplied_metadata(raw):

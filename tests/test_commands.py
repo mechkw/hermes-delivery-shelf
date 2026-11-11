@@ -68,7 +68,7 @@ class CommandTests(unittest.TestCase):
         for command in ('/shelf dl', '/shelf download', '/shelf r3'):
             self.assertIn(command, self.command('help'))
         for command in ('dl 1', 'download 1', 'r3'):
-            self.assertIn('unavailable here', self.command(command))
+            self.assertIn('not bound on this gateway', self.command(command))
         advanced = self.command('help advanced')
         self.assertIn('--file <root:path>', advanced)
         self.assertIn('groups/topics', advanced)
@@ -80,7 +80,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn('Keep-Tag', reply)
         item = self.entries(tag='KEEP-TAG')['items'][0]
         self.assertEqual(item['title'], 'OpsCase')
-        self.assertEqual(item['tags'], ['Keep-Tag', 'Équipe'])
+        self.assertEqual(item['tags'], ['Keep-Tag', 'keep-tag', 'Équipe', 'équipe'])
         self.assertEqual(item['description'], 'Exact description.')
         self.assertEqual(self.ctx.injected, [])
 
@@ -92,7 +92,7 @@ class CommandTests(unittest.TestCase):
         payload = json.loads(self.ctx.injected[-1][0].split('\n', 1)[1])
         self.assertEqual(payload['missing'], ['description'])
         self.assertEqual(payload['supplied']['title'], 'OpsCase')
-        self.assertEqual(payload['supplied']['tags'], ['Keep-Tag'])
+        self.assertEqual(payload['supplied']['tags'], ['Keep-Tag', 'keep-tag'])
         # Fixture completion exercises the save seam, not real-model adherence.
         saved = json.loads(self.ctx.tools['delivery_shelf_register']({
             **payload['supplied'], 'description': 'Fictional completed description.'}))
@@ -101,7 +101,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result['total'], 1)
         self.assertEqual(result['items'][0]['id'], saved['data']['id'])
         self.assertEqual(result['items'][0]['title'], 'OpsCase')
-        self.assertEqual(result['items'][0]['tags'], ['Keep-Tag'])
+        self.assertEqual(result['items'][0]['tags'], ['Keep-Tag', 'keep-tag'])
 
     def test_add_explicit_file_title_tags_and_native_context(self):
         reply = self.command('add Approved plugin artwork #branding, plugins --description "Approved release image." --file "workspaces:approved image.png"', session_id="fictional-session")
@@ -147,10 +147,10 @@ class CommandTests(unittest.TestCase):
             reset_hermes_home_override(token)
         self.assertEqual(self.entries()["total"], 1)
 
-    def test_whitespace_and_tag_normalization(self):
+    def test_whitespace_syntax_preserves_literal_tags(self):
         reply = self.command('add\tRésumé C# guide #Branding, plugins, BRANDING --description "Guide."\t--file\t"workspaces:approved image.png"')
         self.assertIn("Saved", reply)
-        self.assertEqual(self.entries()["items"][0]["tags"], ["Branding", "plugins"])
+        self.assertEqual(self.entries()["items"][0]["tags"], ["Branding", "plugins", "BRANDING"])
 
     def test_missing_metadata_hands_off_without_premature_save(self):
         reply = self.command('add --file "workspaces:approved image.png"', session_id="fictional-session", session_key="telegram:fictional")
@@ -199,7 +199,7 @@ class CommandTests(unittest.TestCase):
         self.command('add Original #branding --description "First description." --file "workspaces:approved image.png"')
         item = self.entries()["items"][0]
         self.assertIn("delivery_shelf_update", self.ctx.tools)
-        fields = {key: value for key, value in item.items() if key not in ("created", "updated")}
+        fields = {key: value for key, value in item.items() if key in plugin._service().ToolEntryUpdate.model_fields}
         fields.update(title="Corrected title", tags=["release"], description="Corrected description.")
         response = json.loads(self.ctx.tools["delivery_shelf_update"](fields))
         self.assertTrue(response["ok"], response)

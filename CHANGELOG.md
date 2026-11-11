@@ -1,69 +1,24 @@
 # Changelog
 
-Notable user-facing changes are recorded here. Release tags identify published versions;
-this file is not a promise of future features.
+Release tags identify published versions. Unreleased notes describe source changes, not a publication or deployment receipt.
 
 ## Unreleased
 
-- Telegram **Add** now saves a recent explicit file reference without a model or
-  injection permission, including groups/topics. Multiple files open a chooser;
-  exact-reference duplicates keep existing metadata. Lookup is active-segment-only;
-  unavailable or compressed-away deliveries use a normal-chat fallback.
-- Fixed premature numbered-result and Add-keyboard publication: mappings/actions
-  are staged until matching acknowledgements, overlapping list updates are refused,
-  stale action generations are never reused, and uncertain outcomes fail closed.
-- Fixed foreign-profile list metadata disclosure and post-wait Add source reads;
-  current profile/owner/session guards run before reads and after blocking work.
+- File-backed saves preserve managed copies and immutable versions. Downloads validate the saved size and hash instead of rereading changed originals. Legacy original-file links remain source-dependent until explicitly preserved.
+- Native Desktop adds Together, Library, and Gallery browsing, an adjacent Library inspector, multi-file Add delivery, and Add version. Manual deliveries and versions accept up to 32 files. Web Dashboard keeps its own interface.
+- Typed `/shelf add` captures the latest recognized file set. `add r1` captures the newest single file; `add rN` captures N distinct files, from 1 through 8. Discovery remains bounded to eligible active-segment `MEDIA:` references, not folders or reconstructed history.
+- Quick capture can generate missing metadata through the configured structured-model service, preserving supplied fields. Generation can be disabled for filename-based quick capture. Manual Generate returns a draft only. Advanced `--file` missing-metadata saves retain their separate current-agent handoff.
+- Concrete version offers accept Yes, Always for this delivery, or Keep current. Changed bytes at the same path can be offered; unchanged bytes stay silent. Standing consent is entry/owner scoped, pauses outside Active, and is revocable from delivery details or the Library inspector. First saves stay deliberate.
+- Approved single-member version replacements retain managed companion files. Manual Add version defines the complete selected set and preserves earlier versions.
+- Archive retains indefinitely. Trash supports 30 or 60 days. Empty Trash applies to all Trash and starts a 60-minute recovery window before managed-copy cleanup. Original working files are never deleted.
+- Native settings cover browsing, date/time display, metadata generation, context, retention, and cleanup. Managed-payload usage includes all versions and queued purges, not original files or total profile disk usage.
+- Allowed file types include Office documents and opaque ZIP attachments under the existing root, size, and safe-file policy.
+- Telegram panels provide saved-file and version choices, explicit Add version confirmation, and bounded attachment sending. `/shelf r3` selects the third newest registration's primary file, not three files. Numbered downloads require an acknowledged expiring list.
+- Technical, operations, command, generation, Telegram, and security guides now distinguish preserved files from legacy references and source inspection from installed/live acceptance.
 
-- Added model-free Telegram **Send file**, numbered `/shelf dl` / `download`, and
-  bounded `r1`–`r5` recent-attachment delivery. Scoped expiring snapshots, revision
-  and file-identity rechecks, duplicate-click fences, and no automatic POST retries.
-- Added `.zip` as opaque download only, retaining the 10 MiB/root/link/name policy.
-  No unpacking, rendering, execution, scanning or reference-only auto-migration.
-- Verified native forum multipart bytes through official loader/dispatcher/PTB with
-  rejecting inference/injection mocks; no live Telegram delivery claimed.
+The native text-Add preparation path refuses automatic capture inside an isolated plugin host before its discovery or metadata-inference work. Manual Add, optional generation, and explicit Save remain the fallback. This describes the implementation, not a qualified installed cancellation result. No live Telegram or native installation result is asserted here.
 
-- Added concise native command-menu metadata and expanded non-saving command help,
-  with real-loader/menu/help/lifecycle regression probes. Documented priority/cap
-  setup and the v0.22.5 global `/help` and `/commands` omission of plugin commands;
-  no custom menu or core-help override. See [Command discovery](docs/COMMANDS.md).
-- Propagated the selected official host through `PYTHONPATH` in verification so
-  catalog child-process probes resolve host imports in clean CI environments.
-
-- Added genuine Telegram inline Shelf panels (Add, recent detail rows, Browse more),
-  current-context Add requests with session guards, and explicit owner policy.
-- Added agent-called `delivery_shelf_offer_update`: same-path edits are silent;
-  new derivatives offer Update registration / Keep current. Approval revises the same
-  ID's file reference with metadata preservation, CAS and exact readback.
-- Added official-loader/gateway-dispatcher/PTB capture verification and honest isolated-host
-  text fallback. Requires Hermes v0.22.5 or later; no live Telegram delivery is claimed.
-  See [Telegram setup and limits](docs/TELEGRAM.md), including the disclosed catalog warning.
-
-- Fixed supplied tag casing loss: create/update now trim boundary whitespace and
-  deduplicate case-insensitively while preserving the first spelling/case. Exact tag
-  filters use Unicode casefold on both sides, so mixed-case and existing lowercase
-  records remain searchable without a migration. Structured tags retain literal commas.
-- Added mixed-case slash direct-save/handoff-to-fixture-save and API create/update/
-  readback/filter regressions, including Unicode and literal SQL-like search input.
-
-- Missing title, tags and description are generated by the current Hermes agent on
-  explicit save requests. Supplied fields are preserved; confirmation follows save
-  and readback and includes all three details. No extra metadata questions.
-- Added `delivery_shelf_update` so users can correct saved metadata conversationally
-  without creating another card; native revision checks protect concurrent edits.
-- Added `--description "text"`; fully specified saves remain direct. Native gateway
-  handoff requires the operator’s `allow_gateway_injection` permission. A queued
-  request is never reported as saved.
-
-- Added `/shelf add <title> #tag1, tag2 --file <root:relative-path>` for direct,
-  explicit file registration from chat, including Telegram.
-- Kept `/shelf <query>` search and added `/shelf search <query>` to search for
-  reserved leading words. Bare `/shelf` uses native inline panels when available,
-  otherwise an explicitly labeled text fallback.
-- Added native-dispatch command tests with public search readback, invalid-input
-  rejection, approved-file enforcement, and profile isolation.
-
-## 0.1.0 — 2026-10-23
+## 0.1.0 - 2026-10-23
 
 ### Added
 

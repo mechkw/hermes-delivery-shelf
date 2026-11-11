@@ -1,308 +1,159 @@
-# Technical guide
+# Delivery Shelf technical reference
 
-[← README](../README.md) · [Operations](OPERATIONS.md) · [Security](../SECURITY.md)
+[README](../README.md) · [Operations](OPERATIONS.md) · [Commands](COMMANDS.md) · [Security](../SECURITY.md)
 
-Delivery Shelf is a small catalog, not a filesystem crawler. The backend owns validation,
-profile selection, persistence, and file access. The two frontends own presentation and
-use their host's authenticated transport.
+Delivery Shelf stores deliberate file collections and preserved file versions. The backend owns the catalog, approved-source policy, managed copies, and lifecycle transitions. Native Desktop and web Dashboard use the host's authenticated plugin transport. They do not expose identical interfaces.
+
+## Runtime layout
+
+| Source | Responsibility |
+| --- | --- |
+| `__init__.py` | Five tools, `/shelf`, generation-task registration, and lifecycle hooks. |
+| `agent_quick_add.py`, `recent_artifacts.py` | Explicit recent-command capture and bounded source discovery. |
+| `agent_versions.py`, `agent_awareness.py` | Concrete version offers, entry-scoped approval, and relevant saved-delivery context. |
+| `telegram_shelf.py` | Optional host-owned panels, file attachments, numbered results, and panel Add. |
+| `dashboard/plugin_api.py` | Models, SQLite catalog, authenticated routes, and generation facade. |
+| `dashboard/managed_files.py`, `dashboard/provenance.py` | Managed file bytes and per-file/version source records. |
+| `dashboard/lifecycle.py`, `dashboard/shelf_settings.py` | Archive, Trash, recovery deadlines, cleanup, and preferences. |
+| `ui/NativeShelf.jsx`, `ui/NativeLibrary.jsx` | Native Desktop chooser, details, Together, Library, and Gallery. |
+| `ui/Shelf.jsx`, `ui/dashboard.jsx` | Web Dashboard view and adapter. |
+| `desktop/plugin.js`, `dashboard/dist/index.js` | Built client bundles. |
+
+Desktop uses `ctx.rest`; Dashboard uses its native authenticated transport. Backend profile binding selects the store. A `profile` query argument acknowledges that binding and cannot switch filesystem homes. A mismatch returns 409.
+
+## Catalog and managed storage
+
+The backend stores data beneath the bound Hermes home:
 
 ```text
-Hermes tools / /shelf ─────────────────────────────┐
-                                                │
-Dashboard → native fetchJSON → authenticated API ├→ profile-bound service
-Desktop   → native ctx.rest  → authenticated API ┘       │
-                                                        ├→ shelf.sqlite3
-                                                        └→ approved registered file
-                                                           (only on explicit access)
+plugin-data/delivery-shelf/
+  shelf.sqlite3
+  managed-files/
+  agent-links.sqlite3
+  allowed-roots.json
+  telegram-owners.json
 ```
 
-## Package map
+Policy and supporting-state files are created only when needed. `shelf.sqlite3` contains entry metadata, versions, provenance, lifecycle state, preferences, and the durable purge queue. `agent-links.sqlite3` contains agent associations, offers, and scoped version permissions.
 
-- `plugin.yaml`, `VERSION`: package identity, capabilities, dependencies, version.
-- `__init__.py`: four tools and the `/shelf` command; synchronized lazy service loading.
-- `telegram_shelf.py`: profile-owned PTB panels, deterministic Add, acknowledged
-  numbered downloads, advanced handoff guards and derivative offers.
-- `recent_artifacts.py`: bounded read-only native-schema adapter for active-segment
-  `MEDIA:` references; [source limits](DETERMINISTIC_ADD.md).
-- `dashboard/plugin_api.py`: input models, catalog, file policy, and FastAPI routes.
-- `dashboard/manifest.json`: Dashboard page declaration.
-- `ui/Shelf.jsx`, `ui/style.css`: shared React view and scoped styles.
-- `ui/dashboard.jsx`: native Dashboard registration and transport adapter.
-- `ui/desktop.jsx`: native Desktop route/sidebar and transport adapter.
-- `dashboard/dist/index.js`, `desktop/plugin.js`: ready-to-load release bundles.
+A file-backed create copies the selected files into a new managed version. Each managed file records its name, size, content hash, media type, and provenance. Managed downloads read those copies, validate size and hash, and never fall back to changed original bytes when a copy is missing or corrupt. Original paths are retained as provenance, not used as managed-download locations.
 
-Dashboard loads an IIFE through its native plugin registry. Desktop loads a self-contained
-ES module importing only host-provided `react` and `@hermes/plugin-sdk`. Relative imports
-are not needed at runtime. Consumers install the built package; Node is only a development
-dependency.
+A legacy entry without versions remains an original-file reference. Its download still requires the source and current source policy. A metadata edit does not freeze that source. An explicit new version creates managed copies; an exact-reference quick Add can also preserve an existing legacy registration. Existing reference-only catalogs are not a retroactive backup of earlier bytes.
 
-## Registering a delivery
+SQLite connections are short-lived. Mutations use transactions and revision checks where required. File-preserving writes reserve `BEGIN IMMEDIATE`, stage managed copies, and discard the staged version on transaction failure. There is no transaction spanning SQLite, model processing, and client delivery. An uncertain response requires exact-entry inspection before retry.
 
-The native `delivery_shelf_register` tool accepts this shape:
+## Input models
 
-```json
-{
-  "title": "Spring launch report",
-  "description": "Approved summary for the launch meeting.",
-  "kind": "report",
-  "project": "Website",
-  "tags": ["launch", "final"],
-  "file": {"root": "workspace", "path": "launch/report.pdf"},
-  "session_id": "example-session-001"
-}
-```
+`EntryInput` accepts:
 
-This is fictional input. The file must exist under the approved root; omit `file` for a
-metadata-only card. Omit `session_id` unless you have an explicit source reference. When
-the native host supplies a session ID to the tool handler, the tool can retain that ID
-if the input omitted it. It never searches for a likely or most recent conversation.
+| Field | Contract |
+| --- | --- |
+| `title` | Required nonblank text, at most 160 characters; control characters refused. |
+| `description` | Text, at most 4,000 characters; default empty. |
+| `kind` | `document`, `image`, `report`, `code`, or `other`. |
+| `project` | Text, at most 100 characters; control characters refused. |
+| `tags` | At most 20 nonblank strings, each at most 40 characters; control characters refused. |
+| `file` | Optional primary `FileRef`. |
+| `files` | Up to 32 `FileRef` members. The primary file is first in the stored set. |
+| `session_id` | Optional source reference, at most 160 letters, digits, `_`, `.`, `:`, or `-`. |
+| `source`, `sources` | Optional exact artifact origins, including per-file source selections. |
 
-A manually supplied session reference is **metadata, not verified provenance**;
-ordinary CRUD does not validate it against a transcript. Deterministic Telegram Add
-is a separate bounded read-only source path: it checks the exact invoking profile
-and session and eligible active assistant file markers. It never copies transcript
-bodies into the catalog. The UI copies the ID, without inventing a session URL or
-promising automatic conversation reopening.
+Unknown fields are rejected. A `FileRef` contains an approved `root` alias and a relative `path`, not a client-supplied absolute path. Manually supplied session metadata is not proof that the file came from that conversation. Source-picker registration resolves the supplied artifact identity before saving. Provenance retains unknown values rather than guessing missing history.
 
-### Input rules
+Saved entries add `id`, epoch-second `created` and `updated`, `revision`, `state`, `versions`, and `current_version`. A version has its own ID, increasing number, creation timestamp, and files. Version and file IDs are scoped to their entry when read.
 
-- Title: trimmed, required, at most 160 characters.
-- Description: at most 4,000 characters.
-- Kind: `document`, `image`, `report`, `code`, or `other`.
-- Project: trimmed, at most 100 characters.
-- Tags: at most 20; each 1–40 printable characters, boundary-trimmed, case-insensitively deduplicated (Unicode casefold), retaining the first spelling/case.
-- File: `null` or a root alias and relative path. Never a browser-selected absolute path.
-- Session ID: optional, at most 160 characters, limited to letters, digits, `_`, `.`, `:`, and `-`.
-- Unknown input keys are rejected.
+`EntryUpdate` requires the current positive JavaScript-safe `revision`. Metadata-only edits retain existing versions and do not reread unchanged original references. A same-path content change is not detected by a metadata edit; use Add version or an exact approved version offer.
 
-Saved entries add an opaque ID, Unix-second `created` and `updated` timestamps, and an
-integer `revision`. The `kind` label describes a delivery; it does not override the
-attachment extension allowlist. A `code` card cannot make an executable downloadable.
+## Tools
 
-## Deterministic and assisted command saves
+Toolset `delivery_shelf` contains:
 
-Telegram `/shelf add` and panel Add use the bounded `recent_artifacts` adapter,
-filename-derived defaults, and `Store.register_file_once()`. A `BEGIN IMMEDIATE`
-reservation serializes exact root/path lookup and creation; an existing reference
-returns its unchanged record. Current profile/owner/session/cancellation guards run
-before post-wait source reads and again after candidate reads. Exact-ID readback
-precedes confirmation. This idempotence is specific to deterministic Add, not general
-CRUD. Active segment and explicit-marker limitations are detailed in
-[Deterministic Add](DETERMINISTIC_ADD.md).
+| Tool | Contract |
+| --- | --- |
+| `delivery_shelf_register` | Deliberate first capture of selected metadata and optional files. A guarded Add request must carry its exact `request_id` and session. |
+| `delivery_shelf_search` | Saved metadata search with `q`, `tag`, `kind`, `project`, `limit`, and `offset`. Default state is Active. |
+| `delivery_shelf_update` | Complete metadata replacement using `id` and current `revision`. Not an approval bypass. |
+| `delivery_shelf_offer_update` | Exact saved `id`, newly delivered `file`, and optional exact `replaces` member. |
+| `delivery_shelf_respond_update` | Exact `offer_id` and `decision` of `yes`, `always`, or `keep`. |
 
-The advanced `/shelf add --file ...` workflow parses optional title, tags and `--description`, validates the selected
-file through the existing root/file policy, and determines which metadata is absent.
-With all fields supplied it saves directly. Otherwise it uses the supported
-`PluginContext.inject_message` to queue a user-requested task for the **current**
-native session, preserving supplied fields as JSON data. Missing native context or
-denied handoff produces a clear failure without storing a placeholder entry.
+CRUD/search results are JSON strings with `ok` and either `data` or `error`. Version offers add a `status` and `saved` state. An offer is not a save. `unchanged` and `paused` offers do not request a user notification.
 
-The normal Hermes agent generates only missing fields from its existing conversation
-context and the selected filename, calls the registration tool, reads the entry back
-with the search tool, and then confirms title, tags and description. The command
-returns no interim success for an accepted queue request: acceptance is not completion.
-Provider costs and normal agent-context processing apply to assisted saves. The
-advanced workflow does not retrieve transcripts, create a second model client, or
-scan folders. Ordinary deterministic Add, retrieval and catalog search do not invoke
-the model.
+A new path in a multi-file version needs the exact saved member it replaces. Approved replacement carries other members forward from managed copies, without requiring their originals. Manual Add version instead defines the entire new file set. Earlier versions remain intact.
 
-Official v0.22.5 provides this injection API. Gateway/modern-host handoff needs
-`plugins.entries.delivery-shelf.allow_gateway_injection: true`. Missing permission
-fails closed. Native integration tests cover permission denial/acceptance and exact
-session-key/profile routing with a capture gateway, separately from real-model tests;
-they do not represent a live Telegram transport test.
+Standing approval is scoped to one saved entry and its approving transport owner. It never authorizes first capture or the whole catalog. Offers pause outside Active. Restoring an entry can resume existing permission. The permission API exposes status and revocation, not a grant operation. Native revocation removes all transport-owner grants for that delivery.
 
-## Searching
+## Search and selection
 
-`delivery_shelf_search` accepts `q`, `tag`, `kind`, `project`, `limit`, and `offset`.
-Search is a literal substring match over titles/descriptions, with exact filters for
-labels. It does not search attachment contents or conversation transcripts. The default
-page has 50 items; the maximum is 100. Offset is bounded at 1,000,000.
+Catalog search matches literal substrings in titles and descriptions. Exact tag filtering uses Unicode casefold. Kind and project filters are exact. Search does not read attachment contents or transcripts. Results sort by last update, then ID. Default page size is 50, maximum 100, and maximum offset is 1,000,000.
 
-Exact tag filtering compares Unicode casefolded values with bound SQL parameters,
-not SQLite's ASCII-only `lower`/`NOCASE`. It matches existing lowercase and new
-mixed-case records without migration; display spelling and order are unchanged by
-reads. Commas, quotes, `%` and `_` remain literal tag characters, not patterns or SQL.
-Casefold is not accent removal or Unicode normalization. Title/description search
-semantics are unchanged.
+Native selection acts on whole deliveries, even when a view shows separate files. Bulk actions accept either explicit IDs or an `EntryFilter`, never both. A filter is evaluated at action time. It is not a frozen snapshot of the count last displayed. Empty Trash in the native UI targets all Trash, independent of visible search or checks.
 
+## Authenticated HTTP API
 
-All native tools return a JSON string. CRUD/search uses `{ "ok": true, "data": ... }`
-or `{ "ok": false, "error": ... }`; the offer tool instead returns an explicit
-`status` and, for sent offers, `saved: false`. `/shelf [search text]` returns up to
-20 matching entries. Native Telegram list/search and Add can send their own panel
-and return `None`; the sync command returns an awaitable which the v0.22.5 gateway
-dispatcher awaits. Returned fallback text has no public send receipt and cannot
-publish numeric download mappings. List/page replacements stage exact entry revisions
-until matching PTB acknowledgement and refuse overlapping publication. See [Telegram behavior and limits](TELEGRAM.md).
+Mount prefix: `/api/plugins/delivery-shelf`. The host owns authentication and effective enablement. Do not mount these routes as an unauthenticated standalone service.
 
-### Correcting metadata
+| Method | Relative route | Result or mutation |
+| --- | --- | --- |
+| GET | `/status` | Version, profile, root aliases, allowed extensions, and byte limit. |
+| GET | `/entries` | Metadata search and pagination; `state` accepts `active`, `archived`, `trash`, `pending_delete`, or `all`. |
+| POST | `/entries` | Create metadata and any managed initial version. |
+| GET / PUT | `/entries/{id}` | Read, or update using the current revision. |
+| DELETE | `/entries/{id}?revision=N` | Move to Trash; returns `files_deleted: false` and the resulting item/state. |
+| POST | `/entries/bulk-action` | `archive`, `trash`, `restore`, or `empty_trash` over IDs or a filter. |
+| POST | `/entries/{id}/versions` | New managed version from `files`, current `revision`, and optional source or `replace_file`. |
+| GET | `/entries/{id}/versions/{version_id}/files/{file_id}` | Exact managed file as `name`, `base64`, and `media_type`. |
+| GET | `/entries/{id}/file` | Current primary file; original-source access only for genuine legacy references. |
+| GET | `/entries/{id}/file?preview=true` | Plain-text preview, at most 64 KiB, with `truncated`. |
+| GET | `/entries/{id}/thumbnail` | Bounded preview for a selected saved file/version where supported. |
+| GET / DELETE | `/entries/{id}/version-permission` | Inspect, or revoke, existing standing approval. |
+| GET / PUT | `/settings` | Profile-local preferences. |
+| GET | `/storage` | Managed-payload usage, including queued purge bytes. |
+| POST | `/cleanup` | Explicit due-item cleanup, even with automatic scheduling off. |
+| GET | `/sources/sessions` | Bounded recent conversation choices. |
+| GET | `/sources/sessions/{session_id}/artifacts` | Bounded delivered-file choices. |
+| POST | `/sources/register`, `/sources/register-many` | Resolve selected origins and preserve one file or a file set. |
+| POST | `/sources/thumbnail` | Bounded source preview where supported. |
+| GET / PUT | `/generation/settings` | `previous_exchanges`, restricted to 5, 10, 20, or 50. |
+| POST | `/generation/draft` | Optional structured metadata draft, not a save. |
 
-`delivery_shelf_update` accepts the full registration metadata plus `id` and the
-current positive safe-integer `revision`. Search first, preserve unchanged fields,
-update the same ID, then read back. It uses the same revision checks and validation
-as UI edits; stale updates fail instead of creating duplicate cards or overwriting
-newer changes. It does not modify or remove the original file.
+The internal legacy `Store.delete()` is not the public DELETE route. Public removal uses lifecycle transitions. Do not call internal deletion as a replacement for Trash or cleanup.
 
-## HTTP API
+## File policy
 
-The native host mounts the router at `/api/plugins/delivery-shelf`. Use the host SDK;
-do not expose the router as a separate unauthenticated service.
+Default source aliases are `workspace` and `workspaces` beneath the active Hermes home. A valid operator-owned `allowed-roots.json` replaces those defaults. `{}` permits no source-file roots. Malformed policy denies source-file access. See [Approve another root](OPERATIONS.md#approve-another-root).
 
-| Method | Relative path | Behavior |
-|---|---|---|
-| GET | `/status` | Version, bound profile name, root aliases, extensions, byte limit; no absolute root paths |
-| GET | `/entries` | Search/filter/page; returns `items`, `total`, `limit`, `offset` |
-| POST | `/entries` | Validate and create; 201 with saved entry |
-| GET | `/entries/{id}` | Read one entry; 404 if absent |
-| PUT | `/entries/{id}` | Replace editable fields with current `revision`; return incremented revision |
-| DELETE | `/entries/{id}?revision=N` | Delete catalog metadata only; `files_deleted: false` |
-| GET | `/entries/{id}/file?preview=true` | Plain-text preview with `text` and `truncated` |
-| GET | `/entries/{id}/file` | JSON containing `name`, `base64`, and octet-stream `media_type` |
+Files are limited to 10 MiB each. Allowed extensions are `.txt`, `.md`, `.csv`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, and `.zip`. ZIP remains opaque. Text previews are plain text, not executable Markdown or HTML.
 
-An optional `profile` query argument acknowledges the **already-bound host profile**.
-It cannot select arbitrary profile paths. A mismatch returns 409. A stale revision also
-returns 409, so clients must refresh and reconcile rather than overwrite newer changes.
+Source reads reject traversal, hidden segments, sensitive names, symlinks, hard-linked or non-regular files, and unsafe ancestors. Checks use POSIX descriptor operations, including `dir_fd` and `O_NOFOLLOW`. A supported remote backend is distinct from universal Windows-backend file support. Filename checks do not detect secrets inside an otherwise allowed file.
 
-Create is not idempotent: repeating a POST creates another entry. After an ambiguous
-network failure, search/read back before retrying. The UI disables duplicate submission
-while a request is active, but that is not an exactly-once delivery guarantee.
+## Generation and recent Add
 
-## Profile and connection isolation
+Recent command discovery recognizes standalone `MEDIA:` markers in eligible assistant rows within the exact active session segment. It is bounded to 40 replies and 64 KiB per reply. It does not reconstruct old compressed-away deliveries, search folders, or prove successful transport. [Conversation Add](DETERMINISTIC_ADD.md) defines selectors and host limits.
 
-Every request resolves the current home through Hermes's `get_hermes_home()` context.
-The service does not retain a global catalog created at import time. Data lives under
-`<bound home>/plugin-data/delivery-shelf/shelf.sqlite3`.
+Quick capture generates omitted fields when `generate_metadata` is enabled. Manual native **Generate** drafts metadata from the first selected file. Both use `ctx.llm.acomplete_structured` with task `delivery_shelf_details`, bounded selected-file input, and history anchored at the source response. Provider processing and costs apply. The content mode distinguishes actual file input from history-only context. Generation alone never saves.
 
-Desktop fences requests and completions against profile, connection, and plugin disposal.
-Dashboard captures its bundle's profile and rejects completions from a removed bundle.
-Disposed views do not issue follow-up mutation verification through a newly rebound
-transport. If the host cannot bind the requested profile, the plugin refuses the mismatch;
-it does not treat a query string as authorization to switch profiles.
+Native text-Add preparation rejects an isolated plugin-host process before source discovery or inference. The fallback is manual Add, optional Generate, and explicit Save; isolation stays enabled. This branch must still be qualified against the installed release.
 
-SQLite operations use short-lived connections, transactions, revision checks, a 10-second
-busy timeout, and DELETE journaling. SQLite JSON1 is required. Plugin storage is separate
-from replaceable package code. This is profile separation within Hermes, not a sandbox
-against other software running as the same operating-system user.
+Advanced `--file` saves use a separate current-agent handoff for missing metadata. That path needs supported session routing and explicit gateway-injection permission where required. Accepted handoff is queued work, not a completed save.
 
-## Registered-file security
+## Lifecycle and settings
 
-[Operations](OPERATIONS.md#approve-another-root) explains the operator-owned root policy.
-A root allowlist is only the first check:
+Archive has no expiration. Trash defaults to 60 days and supports 30 days. Empty Trash moves items to Pending deletion with a separate 60-minute recovery deadline. Restoration is refused after the recorded deadline even if automatic cleanup is disabled. Retention changes recalculate existing Trash deadlines from their trash timestamps.
 
-1. Validate the registered relative path, alias, extension, and filename components.
-2. Open each directory component from the filesystem root using descriptors and
-   no-follow semantics; reject symlink ancestors as well as symlink final files.
-3. Require an ordinary, single-link file and enforce the size bound.
-4. Read through the retained descriptor rather than re-opening an unchecked path.
-5. Reapply policy on every access, including after an allowed-root change.
+Due cleanup removes catalog records and queues only managed version IDs for deletion. It never deletes original working paths. Already-queued purge jobs continue even if automatic scheduling is later disabled. Storage usage counts saved version payloads and queued purges, not originals, SQLite files, or preview caches.
 
-Hidden files, traversal, control characters, alternate-stream syntax, obvious sensitive
-filename families, databases, active HTML/SVG, executables, devices, directories, FIFOs,
-and hard links are refused. Metadata read/search does not read file content.
+Preferences include views, default view, timezone, date format, hour display, quick-capture generation, context count, retention, and automatic cleanup. None grants first-save or global standing consent.
 
-Downloads are limited to 10 MiB before base64 encoding. Text/Markdown/CSV previews read
-at most 64 KiB and render as escaped text. Binary attachments are downloads, not embedded
-active documents. ZIP is supported only as opaque downloadable bytes; it is never
-unpacked, previewed or executed. No blanket archive expansion is allowed. Telegram
-uses native `send_document`, not the base64 API: a bounded off-loop read and final
-revision/policy/file-identity check precede transport. See [direct retrieval](TELEGRAM.md#direct-file-retrieval-no-model-call).
-A permitted file is a live reference, not an immutable snapshot.
+## Compatibility and verification
 
-These checks are not content-based secret detection. An innocuously named report can
-still contain private information. Approve narrow delivery directories and register
-only content you intend to retrieve. On platforms without the required POSIX descriptor
-primitives, file access returns 501 rather than weakening the checks; metadata remains
-available.
-
-## Build and test
-
-Use Node with npm, a Python environment containing the declared runtime dependencies,
-and a Hermes source checkout for native-contract tests. Do not alter a managed Hermes
-Python environment with ad-hoc package installation. Use a separate development environment.
+Source structure, test scripts, and a built bundle are different evidence from installation and native acceptance. Run checks in a disposable development checkout with a separate dependency environment:
 
 ```sh
 npm ci --ignore-scripts
 npx playwright install chromium
-# Set these to your development interpreter and Hermes checkout:
-export PYTHON=/path/to/python
+export PYTHON=/path/to/development/python
 export HERMES_SOURCE=/path/to/hermes-agent
 bash scripts/verify.sh
 ```
 
-The verification runner executes unit/security tests, native API/auth checks, native
-Doctor/catalog validation, builds both adapters, and exercises both loaders in Chromium.
-Temporary fictional homes are cleaned on exit. Screenshots remain in `docs/assets/` as
-public-safe, fictional-data captures. No production transcript or catalog is needed.
-
-For installation lifecycle checks, use `tests/install_lifecycle.py` with a **disposable**
-Hermes checkout beneath `TMPDIR`; native dependency preparation can modify that checkout.
-Never point this test at a live Hermes installation. The CI workflow shows the complete
-isolated setup. It exercises native install, enable, disable, update while disabled,
-and remove, plus the real Desktop copy/update/prune implementation. The catalog is
-verified byte-identical across disable, update, and removal.
-
-## Compatibility and verification
-
-Tested with **Hermes v0.22.5**, official commit
-`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. The full 21-test runner, native HTTP and
-registration checks, both browser-loader suites, and native installation lifecycle
-passed on that release. [Continuous verification](https://github.com/mechkw/hermes-delivery-shelf/actions/workflows/verify.yml) reruns the same gates.
-The root-policy correction also received an independent focused security review. The
-workflow pins the official release and reruns these gates for changes. This does not
-establish an older minimum version.
-
-### Tag-casing correction verification (unreleased)
-
-After the supplied-tag casing correction, the installed-host run passed **33
-unittest tests**, `tests/native_probe.py`, and `tests/native_contract.py` (Doctor:
-3 tools, zero findings; catalog: 16 checks, zero warnings). New regressions preserve
-`OpsCase` / `Keep-Tag` through direct slash saves and handoff-to-fixture completion,
-and cover API create/update/readback, legacy lowercase filters, Unicode casefold,
-case-insensitive deduplication, literal commas, and SQL-like tag input. The same full
-unittest, native probe and contract checks also passed against an isolated archive
-of official Hermes v0.22.5 after the correction.
-
-A separate real native `AIAgent` run passed three fictional cases for this plugin:
-all metadata omitted; exact title and mixed-case tags supplied; exact description
-supplied. Each generated only missing metadata, saved once to actual plugin SQLite,
-searched the stored entry, and returned its title, tags and description. Independent
-readback confirmed supplied values and source references; source hashes stayed
-unchanged across the runs.
-
-That test used a capture callback to obtain the command handoff and a real model
-for subsequent agent/tool execution. It is not live Telegram delivery or a
-browser/Electron test. All fixture homes were removed; production remains unchanged.
-
-Required host surfaces are native tool/command registration, request-bound home context,
-authenticated plugin API mounting, Dashboard React/fetchJSON registration, and Desktop
-unified-package loading with `ctx.rest`, route/sidebar contributions, profile/connection
-atoms, and disposal hooks. Python dependencies are FastAPI and Pydantic 2.
-
-The complete runner passed after the root-policy review correction:
-
-- 21 unit/security tests, including concurrent profile contexts, revision conflicts,
-  and fail-closed handling of dangling policy symlinks and non-regular policy files.
-- Native unauthenticated 401, authenticated CRUD/readback, denied source files, served
-  release bundle, and disabled-plugin 404 after the router was already mounted.
-- Native Doctor: two registered tools, zero findings; catalog validation: 16 checks,
-  zero warnings.
-- Both native frontend loaders at 360, 768, and 1440 pixels; CRUD, search, preview,
-  browser download, keyboard dialogs, error/retry, deletion, and disposal fencing.
-- Light → dark → light theme changes, no horizontal overflow, mobile controls at least
-  44 pixels high, and measured muted-card text contrast of 4.78:1 light / 7.15:1 dark.
-
-The Desktop harness uses the actual native runtime loader with real React and HTTP,
-but doubles SDK state/IPC/UI-kit boundaries. **It is not a full Electron-shell test.**
-Full Electron OS-save dialogs, remote/OAuth deployment, Windows/macOS execution, and
-out-of-process plugin-host transport are not established by this evidence. Arbitrary
-user themes are not covered by the two measured palettes.
-
-## Deliberate boundaries
-
-Version 0.1 does not include automatic capture, generic filesystem browsing, uploads,
-transcript indexing, automatic session reopening, bulk actions, import/export, immutable
-file copies, or general CRUD request-ID deduplication. Deterministic Telegram Add
-has transactional exact-reference deduplication; advanced agent-handoff requests
-have bounded, short-lived duplicate-file claims. See [Telegram limits](TELEGRAM.md).
-Keeping the scope small makes the privacy and file-access rules easier to understand and test.
+The runner includes unit, native fixture, build, and browser checks. It is not a live Telegram or full Electron acceptance receipt. Backend isolation and cancellation, actual saved bytes, paired-plugin load order, remote transport, and native UI require qualification against the exact release artifact. This reference does not certify a minimum host version or successful deployment.

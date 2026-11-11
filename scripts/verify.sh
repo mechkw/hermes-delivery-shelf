@@ -10,6 +10,11 @@ export PYTHONPATH="$HERMES_SOURCE${PYTHONPATH:+:$PYTHONPATH}"
 export TMPDIR
 mkdir -p "$TMPDIR"
 "${PYTHON:-python}" -m unittest discover -s tests -p 'test_*.py' -v
+# unittest imports these modules but cannot execute their pytest fixture tests.
+"${PYTHON:-python}" -m pytest -v -p no:cacheprovider \
+  tests/test_lifecycle_settings.py tests/test_managed_files.py \
+  tests/test_replace_version.py tests/test_version_permission.py
+node --test tests/metadata-errors.test.mjs tests/collection-readiness.test.mjs
 "${PYTHON:-python}" tests/native_probe.py
 "${PYTHON:-python}" tests/native_contract.py
 "${PYTHON:-python}" tests/native_generation_lifecycle.py

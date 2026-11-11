@@ -1,4 +1,4 @@
-"""Explicit saves; optional native-agent metadata completion, no background capture."""
+"""Explicit durable saves; bounded configured-model metadata, no background capture."""
 import importlib.util
 import json
 from pathlib import Path
@@ -165,7 +165,7 @@ def _add_command(ctx, raw_args, *, session_id=None, session_key=None, platform=N
 
 
 def register(ctx):
-    from .telegram_shelf import Controller, GUIDANCE
+    from .telegram_shelf import Controller, GUIDANCE, NATIVE_UNAVAILABLE
     api = _service()
     if all(callable(getattr(ctx, name, None)) for name in ('register_auxiliary_task', 'on_unload')):
         ctx.register_auxiliary_task(api.GENERATION_TASK, display_name='Delivery details',
@@ -173,11 +173,17 @@ def register(ctx):
             defaults=api.GENERATION_DEFAULTS)
         api.bind_generation(ctx)
     controller = Controller(ctx, api)
+    from .agent_awareness import Awareness
+    controller.awareness = Awareness(controller)
+    from .agent_versions import Versions
+    versions = Versions(controller)
     if callable(getattr(ctx, "on_unload", None)):
         ctx.on_unload(controller.close)
+        controller.start_cleanup()
     if callable(getattr(ctx, "register_hook", None)):
         ctx.register_hook("on_session_reset", lambda **kwargs: controller.boundary(reset=True, **kwargs))
         ctx.register_hook("on_session_delete", controller.boundary)
+        ctx.register_hook("pre_llm_call", controller.awareness.context)
     if callable(getattr(ctx, "register_system_prompt_section", None)):
         ctx.register_system_prompt_section("shelf-workflow", GUIDANCE)
     if callable(getattr(ctx, "register_platform_handler", None)):
@@ -186,16 +192,29 @@ def register(ctx):
         except (NotImplementedError, RuntimeError):
             # Isolated plugin hosts cannot own PTB objects. Never relax isolation.
             pass
+    ctx.register_tool(
+        name="delivery_shelf_respond_update", toolset="delivery_shelf",
+        description="Apply the user's conversational yes, always for THIS delivery, or keep to an exact pending version offer.",
+        schema={"name":"delivery_shelf_respond_update", "description":
+            "Respond only after the user explicitly approves an existing exact offer. yes saves that version; "
+            "always saves it and authorizes subsequent concrete new versions of THAT saved entry only; keep changes nothing. "
+            "Never use to perform first capture or infer approval from file delivery. Read back the returned ID.",
+            "parameters":{"type":"object", "additionalProperties":False, "required":["offer_id","decision"],
+                "properties":{"offer_id":{"type":"string","pattern":"^[a-f0-9]{32}$"},
+                    "decision":{"type":"string","enum":["yes","always","keep"]}}}},
+        handler=lambda args, **kwargs: versions.run("respond", args, kwargs.get("session_id")), check_fn=lambda: True,
+    )
     register_schema = api.EntryInput.model_json_schema()
     register_schema["properties"]["request_id"] = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
     ctx.register_tool(
         name="delivery_shelf_offer_update", toolset="delivery_shelf",
-        description="Offer an explicit derivative to the user; never automatically retarget a saved entry.",
-        schema={"name": "delivery_shelf_offer_update", "description": "After creating a new derivative of a known registered file, offer Update registration / Keep current. Same-path edits are silent. No change before approval. CLI/non-Telegram returns unsupported; ask for explicit confirmation before using update. Never invent lineage or scan for files.",
+        description="Offer a concrete new version of a deliberately saved delivery; entry-scoped standing consent may save it.",
+        schema={"name": "delivery_shelf_offer_update", "description": "After delivering a concrete new version of a known deliberately saved entry, offer its exact file, including changed bytes at the same path. Unchanged bytes stay silent. Return the offer question; conversational yes or always uses delivery_shelf_respond_update. Standing approval applies ONLY to that entry, is paused outside active state, and never authorizes initial capture. Preserve companion files. Never invent lineage, infer by filename, or scan files/catalog for candidates.",
                 "parameters": {"type": "object", "additionalProperties": False, "required": ["id", "file"],
                                "properties": {"id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
-                                              "file": api.FileRef.model_json_schema()}}},
-        handler=lambda args, **kwargs: controller.offer(args), check_fn=lambda: True,
+                                              "file": api.FileRef.model_json_schema(),
+                                              "replaces": {**api.FileRef.model_json_schema(), "description":"Exact saved member to replace. Required for a new path in a multi-file delivery; ask the user when unknown."}}}},
+        handler=lambda args, **kwargs: versions.run("offer", args, kwargs.get("session_id")), check_fn=lambda: True,
     )
     ctx.register_tool(
         name="delivery_shelf_register", toolset="delivery_shelf",
@@ -220,16 +239,20 @@ def register(ctx):
         import re
         if re.fullmatch(r'r[0-9]+', text):
             if not re.fullmatch(r'r[1-5]', text):
-                return 'Use /shelf r1 through /shelf r5 (1–5 recent attached deliveries).'
-            if platform != 'telegram' or controller.application is None:
+                return 'Use /shelf r1 through /shelf r5 (Nth most recently saved delivery; r1 is last saved).'
+            if platform != 'telegram':
                 return 'File sending unavailable here; download in Desktop or Dashboard.'
+            if controller.application is None:
+                return NATIVE_UNAVAILABLE
             return controller.download_recent(controller.identity(source, session_id, session_key, platform), int(text[1:]))
         if text.split(maxsplit=1)[:1] in (["dl"], ["download"]):
             match = re.fullmatch(r'(?:dl|download) ([1-9][0-9]?)', text)
             if not match:
                 return 'Use /shelf dl <number> from your last /shelf list.'
-            if platform != 'telegram' or controller.application is None:
+            if platform != 'telegram':
                 return 'File sending unavailable here; download in Desktop or Dashboard.'
+            if controller.application is None:
+                return NATIVE_UNAVAILABLE
             return controller.download_number(controller.identity(source, session_id, session_key, platform), int(match[1]))
         if not text and platform == "telegram" and controller.application is not None:
             # v0.22.5 dispatcher awaits a coroutine returned from a sync command.
@@ -251,20 +274,22 @@ def register(ctx):
         if text == "help":
             return ('/shelf — browse saved deliveries\n'
                     '/shelf search <query> — find a saved delivery\n'
-                    '/shelf add — save a recent file from this conversation (no model)\n'
+                    '/shelf add — save a recent file; generate missing details with your configured model\n'
+                    '/shelf add r3 — save the 3 most recent files (r1–r8; r1 saves newest ONE)\n'
                     '/shelf dl <number> — send from your last list (10 minutes)\n'
                     '/shelf download <number> — same as dl\n'
-                    '/shelf r3 — send up to 3 recent attached deliveries (r1–r5)\n'
+                    '/shelf r3 — retrieve the 3rd most recently saved delivery (r1–r5; r1 is last saved)\n'
                     'Telegram file sends need no model; Desktop/Dashboard also support downloads.\n'
                     '/shelf help advanced — manual saves and setup details')
         if text == "help advanced":
             return ('/shelf — Telegram inline panel (when available); otherwise text list\n'
                     '/shelf <query> or /shelf search <query> — search saved deliveries\n'
                     '/shelf add [title] [#tags] [--description "text"] — save a recent file; choose among multiple files\n'
+                    '/shelf add rN [title] [#tags] [--description "text"] — save the most recent N files (1–8)\n'
                     '/shelf add [title] [#tag1, tag2] --file <root:path> [--description "text"] — choose an explicit file\n'
                     '/shelf help advanced — show this syntax without saving\n'
                     'Files must exist in an approved root; quote file references containing spaces. '
-                    'Add reads only explicit recent delivery references in this conversation, without a model. '
+                    'Telegram Add reads only explicit recent delivery references in this conversation. Missing details use a bounded configured-model call per chosen file (at most eight); typed values are kept. '
                     'Several files or no file found? Use Saved → Delivery Shelf → Add; Telegram supports a native chooser.\n'
                     'For advanced --file commands, the current agent fills missing metadata. '
                     'Assisted saves require current session context and '
@@ -272,7 +297,9 @@ def register(ctx):
                     'Supply all metadata with --file to save directly without a model turn.\n'
                     'Telegram Add works in groups/topics. Advanced --file missing-metadata handoffs still require a private chat '
                     'or fully supplied metadata. '
-                    'Telegram panels/Add also require the operator owner policy.')
+                    'Telegram panels/Add also require the operator owner policy.\n'
+                    'View a delivery → Send file or Versions to retrieve saved copies.\n'
+                    'Add version → choose exact recent files → Confirm new version; old versions are retained.')
         if text.split(maxsplit=1)[:1] == ["add"]:
             identity = controller.identity(source, session_id, session_key, platform) if source is not None and platform == 'telegram' else None
             return _add_command(ctx, text[3:].strip(), session_id=session_id, session_key=session_key, platform=platform,

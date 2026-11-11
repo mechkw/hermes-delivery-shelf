@@ -14,13 +14,22 @@ from dataclasses import dataclass, field
 TTL = 600
 CAPACITY = 128
 PAGE = 5
+NATIVE_UNAVAILABLE = (
+    'Delivery Shelf · native Telegram buttons and downloads are not bound on this gateway. '
+    'Nothing saved or sent. After a plugin reload, the operator must rebuild/restart the owning '
+    'gateway native client; repeated plugin reloads cannot repair this host lifecycle gap. '
+    'If plugin isolation is enabled, native handlers are unsupported; keep isolation unchanged.'
+)
 GUIDANCE = (
     "Delivery Shelf: after producing a concrete NEW derivative of an already registered file, "
     "call delivery_shelf_offer_update with that known entry ID and the explicit new root/path. "
-    "Never scan for candidates. Same-path edits are silent: do not notify or offer. "
-    "An offer is NOT a save; only the user's Update registration button authorizes retargeting. "
-    "Keep current leaves the registration unchanged. Never use delivery_shelf_update to bypass "
-    "this consent. For a Shelf Add request, copy its request_id into every delivery_shelf_register "
+    "Never scan for candidates. Newly delivered changed bytes, even at the same path, may be offered; unchanged bytes stay silent. "
+    "For a multi-file delivery and a new path, supply replaces with the exact known saved member; ask if unclear. "
+    "First save is ALWAYS deliberate. Return the exact version-offer question; an offer is NOT a save. "
+    "After the user's conversational yes, call delivery_shelf_respond_update with the exact offer_id and yes. "
+    "Their always authorizes subsequent concrete versions of THIS already-saved delivery only; use decision always. "
+    "Keep current changes nothing. Never infer lineage from filenames, scan the catalog, or create a global auto-save permission. "
+    "Never use delivery_shelf_update to bypass version approval. For a Shelf Add request, copy its request_id into every delivery_shelf_register "
     "call and use its exact session_id; then search/read back each saved ID before reporting success. "
     "If no recent artifact is identifiable from current conversation context, ask rather than guess."
 )
@@ -52,8 +61,12 @@ class Panel:
     pending_actions: dict = field(default_factory=dict)
     action_generation: int = 0
     delivery: object = None
+    recent_count: int | None = None
     candidates: list = field(default_factory=list)
     supplied: dict = field(default_factory=dict)
+    version_target: dict | None = None
+    version_selection: list = field(default_factory=list)
+    version_stamps: list = field(default_factory=list)
     cancelled: threading.Event = field(default_factory=threading.Event)
 
 
@@ -77,6 +90,21 @@ class Controller:
         self.epoch = 0
         self.retired_sessions = set()
         self.session_fenced = False
+
+    def start_cleanup(self, interval=60):
+        self.cleanup_stop = threading.Event()
+        def work():
+            while not self.cleanup_stop.wait(interval):
+                with self.lock:
+                    if not self.alive:
+                        return
+                try:
+                    self.api.Store(self.home).cleanup_due()
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception('Delivery Shelf scheduled cleanup failed')
+        self.cleanup_thread = threading.Thread(target=work, name='delivery-shelf-cleanup', daemon=True)
+        self.cleanup_thread.start()
 
     def owners(self):
         """Separate operator policy, re-read on EVERY interaction, fail closed."""
@@ -107,6 +135,9 @@ class Controller:
                 del collection[next(iter(collection))]
 
     def close(self):
+        if hasattr(self, 'cleanup_stop'):
+            self.cleanup_stop.set()
+            self.cleanup_thread.join(timeout=2)
         with self.lock:
             self.alive = False
             self.panels.clear()
@@ -125,7 +156,9 @@ class Controller:
             else:
                 self.retired_sessions.update(retired)
             if reset and not old_session_id:
-                self.session_fenced = True  # Cannot prove which prior generation was retired.
+                # Startup/resume can omit the old ID. The epoch and removal of
+                # every outstanding capability fence old work; they must not
+                # permanently reject a freshly dispatched, session-bound Add.
                 ids = set()
             for collection in (self.panels, self.requests, self.snapshots):
                 for key, value in list(collection.items()):
@@ -262,17 +295,23 @@ class Controller:
             entry = self.api.Store(self.home).get(detail)
             text = ('Shelf · Details\n' + entry['title'] + '\n' + entry['description'][:1800] +
                     '\nTags: ' + ', '.join(entry['tags']))
-            available = False
-            if entry['file']:
-                try:
-                    with self.api.open_file(self.home, self.api.FileRef.model_validate(entry['file'])):
-                        available = True
-                except Exception:
-                    pass
-            if available:
+            versions = entry.get('versions') or []
+            current = next((v for v in versions if v['id'] == entry.get('current_version')), None)
+            if current:
+                files = current['files']
+                text += f"\nVersion {current['number']} · {len(files)} file(s)"
+                for number, item in enumerate(files, 1):
+                    label = 'Send file' if len(files) == 1 else f"Send {number} · {item['name'][:43]}"
+                    row(label, ('download', (entry['id'], entry['revision'], current['id'], item['id'])))
+                if 1 < len(files) <= 5:
+                    row('Send all files', ('download_set', (entry['id'], entry['revision'], current['id'])))
+                row('Versions', ('versions', (entry['id'], entry['revision'], 0)))
+            elif entry.get('file'):
+                # Legacy availability is checked only by read_entry_file at send time.
                 row('Send file', ('download', (entry['id'], entry['revision'])))
             else:
-                text += '\nFile unavailable.' if entry['file'] else '\nNo file attached.'
+                text += '\nNo file attached.'
+            row('Add version', ('add_version', (entry['id'], entry['revision'])))
             row('Back to recent', ('page', 0))
         else:
             data = self.api.Store(self.home).search(q=query or '', limit=20 if query is not None else PAGE, offset=offset)
@@ -293,6 +332,89 @@ class Controller:
             if query is None:
                 row('Browse more', ('page', offset + PAGE if offset + PAGE < data['total'] else 0))
         return self._stage_keyboard(token, panel, text, buttons)
+
+    def _versions_keyboard(self, token, panel, value, *, selected=False):
+        entry_id, revision, selector = value
+        entry = self.api.Store(self.home).get(entry_id)
+        if entry['revision'] != revision or not self._panel_current(token, panel):
+            raise ValueError('Delivery changed. Open /shelf again.')
+        versions = entry.get('versions') or []
+        buttons = []
+        if selected:
+            version = next(v for v in versions if v['id'] == selector)
+            text = f"Shelf · Version {version['number']}\n{entry['title']}"
+            for number, item in enumerate(version['files'], 1):
+                text += f"\n{number}. {item['name'][:100]} · {item['size']} bytes"
+                label = 'Send file' if len(version['files']) == 1 else f"Send {number} · {item['name'][:43]}"
+                buttons.append((label, ('download', (entry_id, revision, version['id'], item['id']))))
+            if 1 < len(version['files']) <= 5:
+                buttons.append(('Send all files', ('download_set', (entry_id, revision, version['id']))))
+            buttons.append(('Versions', ('versions', (entry_id, revision, 0))))
+        else:
+            offset = selector
+            text = 'Shelf · Versions\n' + entry['title']
+            for version in list(reversed(versions))[offset:offset + PAGE]:
+                buttons.append((f"Version {version['number']}", ('version', (entry_id, revision, version['id']))))
+            if offset:
+                buttons.append(('Previous versions', ('versions', (entry_id, revision, max(0, offset - PAGE)))))
+            if offset + PAGE < len(versions):
+                buttons.append(('More versions', ('versions', (entry_id, revision, offset + PAGE))))
+        buttons.append(('Back to delivery', ('detail', entry_id)))
+        return self._stage_keyboard(token, panel, text[:3900], buttons)
+
+    def _version_downloads(self, identity, value):
+        if not self.permitted(identity):
+            raise ValueError('Not authorized')
+        entry_id, revision, version_id = value
+        entry = self.api.Store(self.home).get(entry_id)
+        if entry['revision'] != revision:
+            raise ValueError('Delivery changed')
+        version = next(v for v in entry['versions'] if v['id'] == version_id)
+        if not 1 <= len(version['files']) <= 5:
+            raise ValueError('Choose individual files for versions containing more than five files')
+        return [(entry_id, revision, version_id, item['id']) for item in version['files']]
+
+    def _confirm_version(self, token, panel, index):
+        self._authorize_panel_commit(token, panel, claim=False)
+        refs = list(panel.candidates) if index == -1 else [panel.candidates[index]]
+        stamps = [self.api.file_stamp(self.home, self.api.FileRef.model_validate(ref)) for ref in refs]
+        self._authorize_panel_commit(token, panel, claim=False)
+        panel.version_selection, panel.version_stamps = refs, stamps
+        text = ('Shelf · Add version\n' + panel.version_target['title'] +
+                '\nThe previous versions will remain available. Save these exact files as a NEW version?\n' +
+                '\n'.join(ref['root'] + ':' + ref['path'] for ref in refs))
+        return self._stage_keyboard(token, panel, text[:3900], [
+            ('Confirm new version', ('commit_version', None)), ('Cancel', ('cancel_recent', None))])
+
+    def _commit_version(self, token, panel):
+        from .recent_artifacts import recent, candidates
+        old = panel.version_target
+        if not old or not panel.version_selection:
+            raise ValueError('Choose files before approving a version')
+        def authorize():
+            self._authorize_panel_commit(token, panel, claim=False)
+            current = recent(self.home, self.profile, panel.identity['session_id'], cutoff=panel.delivery.cutoff)
+            self._authorize_panel_commit(token, panel, claim=False)
+            if current != panel.delivery or candidates(self.api, self.home, current) != panel.candidates:
+                raise ValueError('Recent delivery changed. Nothing saved.')
+            for ref, stamp in zip(panel.version_selection, panel.version_stamps):
+                if self.api.file_stamp(self.home, self.api.FileRef.model_validate(ref)) != stamp:
+                    raise ValueError('Selected file changed. Nothing saved.')
+            self._authorize_panel_commit(token, panel)
+        store = self.api.Store(self.home)
+        saved = store.add_version(old['id'], self.api.VersionInput(
+            revision=old['revision'], files=panel.version_selection), authorize_commit=authorize)
+        verified = store.get(old['id'])
+        if (verified != saved or saved['revision'] != old['revision'] + 1 or
+                len(saved['versions']) != len(old.get('versions', [])) + 1 or
+                any(saved[k] != old[k] for k in ('title', 'tags', 'description', 'kind', 'project', 'session_id'))):
+            raise ValueError('Unable to confirm version. Inspect the delivery before retrying.')
+        if not self._panel_current(token, panel):
+            raise ValueError('Session changed; inspect saved deliveries before retrying')
+        panel.consumed = False
+        panel.version_target = None
+        return self._stage_keyboard(token, panel, 'Shelf · New version saved\n' + saved['title'], [
+            ('View saved file', ('detail', saved['id']))])
 
     def _prepare_send(self, identity, offer, epoch, publication, query):
         owners, home = self.owners(), self.api.bound_home()
@@ -473,7 +595,7 @@ class Controller:
             return 'Shelf · List unavailable or not authorized.'
         lines = [f"Delivery Shelf — {data['total']} matching deliveries"]
         lines.extend(f"• {e['title']}" + ('' if e['file'] else ' · no file attached') for e in data['items'])
-        lines.append('Numbered downloads unavailable here. Download files in Desktop or Dashboard.')
+        lines.append(NATIVE_UNAVAILABLE)
         lines.append('/shelf search <query> — find a saved delivery\n/shelf help — more options')
         return '\n'.join(lines)
 
@@ -487,20 +609,32 @@ class Controller:
                 return None
             return snapshot['items'][number - 1], snapshot
 
+    def _recent_saved_selection(self, identity, number):
+        # rN is an ordinal registration, not a batch size or updated-order list.
+        # Keep this bounded query here rather than changing the shared browse order.
+        if not self.permitted(identity) or type(number) is not int or not 1 <= number <= 5:
+            raise ValueError('Not authorized or invalid saved-entry number')
+        store = self.api.Store(self.home)
+        if not self.permitted(identity):
+            raise ValueError('Session changed')
+        with store.connect() as conn:
+            row = conn.execute('SELECT id,revision FROM entries ORDER BY created DESC,rowid DESC LIMIT 1 OFFSET ?',
+                               (number - 1,)).fetchone()
+        if not self.permitted(identity):
+            raise ValueError('Session changed')
+        return (row['id'], row['revision']) if row else None
+
     async def download_recent(self, identity, number):
         epoch = self.epoch
         if not await asyncio.to_thread(self.permitted, identity):
             return 'Shelf · File sending unavailable or not authorized.'
         try:
-            entries = await asyncio.to_thread(lambda: self.api.Store(self.home).recent_attached(number))
+            selection = await asyncio.to_thread(self._recent_saved_selection, identity, number)
         except Exception:
             return 'Shelf · List unavailable. Try /shelf again.'
-        if not entries:
-            return 'Shelf · No attached files saved. Open /shelf to browse.'
-        result = await self.download(identity, [(e['id'], e['revision']) for e in entries], expected_epoch=epoch)
-        if len(entries) < number:
-            result += f' {number - len(entries)} fewer attached deliveries than requested.'
-        return result
+        if selection is None:
+            return f'Shelf · No saved delivery r{number}. Open /shelf to browse.'
+        return await self.download(identity, [selection], expected_epoch=epoch)
 
     async def download_number(self, identity, number):
         epoch = self.epoch
@@ -518,31 +652,28 @@ class Controller:
                 meta.st_ctime_ns, meta.st_nlink, meta.st_mode)
 
     def _file_snapshot(self, selection):
-        """Bounded worker-only read; archives are opaque, never interpreted."""
-        entry_id, revision = selection
-        entry = self.api.Store(self.home).get(entry_id)
-        if entry['revision'] != revision:
+        """Read only through the shared managed-byte/legacy policy boundary."""
+        import hashlib
+        from types import SimpleNamespace
+        store = self.api.Store(self.home)
+        entry = store.get(selection[0])
+        if entry['revision'] != selection[1]:
             raise ValueError('changed')
-        if not entry['file']:
+        version, file_id = selection[2:] if len(selection) == 4 else (None, None)
+        name, content, media_type = self.api.read_entry_file(store, entry, version, file_id)
+        if len(content) > self.api.MAX_FILE:
             raise ValueError('unavailable')
-        ref = self.api.FileRef.model_validate(entry['file'])
-        with self.api.open_file(self.home, ref) as stream:
-            before = self._fingerprint(os.fstat(stream.fileno()))
-            content = stream.read(self.api.MAX_FILE + 1)
-            after = self._fingerprint(os.fstat(stream.fileno()))
-        if before != after or len(content) != after[2] or len(content) > self.api.MAX_FILE:
-            raise ValueError('changed')
-        return entry, ref, after, content
+        fingerprint = (name, len(content), hashlib.sha256(content).hexdigest(), media_type)
+        return entry, SimpleNamespace(path=name), fingerprint, content
 
     def _download_authorized(self, identity, selection, ref, fingerprint, epoch, application, panel_token, panel, snapshot):
-        # Re-read revision and root policy, and verify the same inode still names
-        # the bounded bytes. This is the send authorization point, not a long DB lock.
-        entry = self.api.Store(self.home).get(selection[0])
-        if entry['revision'] != selection[1] or entry['file'] != ref.model_dump():
+        # Recheck the exact immutable saved version, revision and policy before
+        # transport; for legacy entries the helper also rechecks the source policy.
+        if not self.permitted(identity):
             return False
-        with self.api.open_file(self.home, ref) as stream:
-            if self._fingerprint(os.fstat(stream.fileno())) != fingerprint:
-                return False
+        _, _, current, _ = self._file_snapshot(selection)
+        if current != fingerprint:
+            return False
         owners, home = self.owners(), self.api.bound_home()
         with self.lock:
             return (home == self.home and epoch == self.epoch and application is self.application and
@@ -659,8 +790,14 @@ class Controller:
             if request:
                 return self.new_request(panel.identity)
 
-    def _prepare_text_add(self, identity, raw, epoch, cancelled):
+    def _prepare_text_add(self, identity, raw, epoch, cancelled, loop=None):
         """Native command consent, independent of PTB and metadata inference."""
+        # Native RPC proxies inference, but not the caller's cancellation. Local
+        # worker flags cannot authorize automatic saves after that caller exits.
+        if os.environ.get('HERMES_PLUGIN_HOST_PROCESS') == '1':
+            return ('Delivery Shelf not saved: the isolated plugin host cannot propagate caller cancellation. '
+                'Open Saved → Delivery Shelf → Add, enter metadata manually (or Generate details to draft), then Save. '
+                'No isolation or permission setting needs changing.')
         from .recent_artifacts import recent, candidates, metadata, supplied_metadata, MISSING
         from fastapi import HTTPException
         from pydantic import ValidationError
@@ -678,6 +815,8 @@ class Controller:
 
         def authorize():
             home = self.api.bound_home()
+            if identity['platform'] == 'telegram' and not self.permitted(identity):
+                raise ValueError('Authorized current session and Telegram owner policy required.')
             with self.lock:
                 if (home != self.home or identity['profile'] != self.profile or not self.alive or
                         self.session_fenced or self.epoch != epoch or cancelled.is_set() or
@@ -686,40 +825,13 @@ class Controller:
 
         try:
             authorize()  # Before any source/catalog query, not just before the write.
-            if (identity['platform'] not in ('cli', 'desktop', 'tui', 'local', 'api_server') or
+            if (identity['platform'] not in ('cli', 'desktop', 'tui', 'local', 'api_server', 'telegram') or
                     not isinstance(identity['session_id'], str) or
                     not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', identity['session_id']) or
                     (identity['platform'] != 'cli' and not identity['session_key'])):
                 raise ValueError('Current conversation unavailable. Open a conversation and use /shelf add, or choose a file in Saved → Delivery Shelf.')
-            supplied = supplied_metadata(raw)
-            delivery = recent(self.home, self.profile, identity['session_id'])
-            authorize()
-            if delivery is None:
-                raise ValueError(MISSING)
-            refs = candidates(self.api, self.home, delivery)
-            entries = [metadata(self.api, ref, identity['session_id'], supplied) for ref in refs]
-            authorize()
-            if len(entries) != 1:
-                # Host text returns have no native message receipt. Do not publish
-                # numbered choices or fabricate a --file command for the user.
-                return ('Several recent files found. Nothing saved. '
-                        'Open Saved → Delivery Shelf → Add and choose the file from this conversation.')
-
-            def authorize_commit():
-                nonlocal commit_authorized
-                # register_file_once holds the catalog reservation. Recheck the
-                # source identity and current root policy after any SQLite wait.
-                authorize()
-                current = recent(self.home, self.profile, identity['session_id'], cutoff=delivery.cutoff)
-                authorize()
-                if current != delivery or candidates(self.api, self.home, current) != refs:
-                    raise ValueError('Recent delivery changed. Use /shelf add again.')
-                authorize()
-                commit_authorized = True
-
-            item, existing = self.api.Store(self.home).register_file_once(entries[0], authorize_commit=authorize_commit)
-            authorize()  # No metadata disclosure after a profile/lifecycle change.
-            return ('Already saved to Delivery Shelf: ' if existing else 'Saved to Delivery Shelf: ') + item['title']
+            from .agent_quick_add import save
+            return save(self, identity, raw, authorize, loop)
         except ValidationError:
             return failure('recent file or metadata is unsupported by the current policy.')
         except HTTPException as exc:
@@ -732,17 +844,20 @@ class Controller:
     async def add_recent_text(self, identity, raw='', epoch=None):
         cancelled = threading.Event()
         try:
-            return await asyncio.to_thread(self._prepare_text_add, identity, raw, epoch, cancelled)
+            return await asyncio.to_thread(self._prepare_text_add, identity, raw, epoch, cancelled, asyncio.get_running_loop())
         except asyncio.CancelledError:
             cancelled.set()  # Cancellation does not stop a worker waiting for SQLite.
             raise
 
-    def _load_recent(self, panel):
+    def _load_recent(self, token, panel):
         from .recent_artifacts import recent, candidates, metadata, MISSING
-        delivery = recent(self.home, self.profile, panel.identity['session_id'])
+        self._authorize_panel_commit(token, panel, claim=False)
+        delivery = recent(self.home, self.profile, panel.identity['session_id'], count=panel.recent_count)
+        self._authorize_panel_commit(token, panel, claim=False)
         if delivery is None:
             raise ValueError(MISSING)
         refs = candidates(self.api, self.home, delivery)
+        self._authorize_panel_commit(token, panel, claim=False)
         # Validate explicit fields before offering or committing any choice.
         for ref in refs:
             metadata(self.api, ref, panel.identity['session_id'], panel.supplied)
@@ -757,30 +872,90 @@ class Controller:
         # Number long/colliding labels so truncation cannot make choices identical.
         labels = [label if len(label) <= 60 and labels.count(label) == 1 else f'{i+1}. …{label[-53:]}'
                   for i, label in enumerate(labels)]
+        choices = [(label, ('save_recent', i)) for i, label in enumerate(labels)]
+        if panel.version_target:
+            choices.append(('Use all recent files', ('save_recent', -1)))
+        elif len(panel.candidates) > 1:
+            choices.append((f'Save all {len(panel.candidates)} files', ('save_recent', -1)))
         return self._stage_keyboard(token, panel, 'Shelf · Choose a file to save',
-            [(label, ('save_recent', i)) for i, label in enumerate(labels)] +
-            [('Cancel', ('cancel_recent', -1))])
+            choices + [('Cancel', ('cancel_recent', -1))])
 
+
+    def _recent_metadata(self, token, panel, ref):
+        """One bounded configured-model call, no agent injection or tool loop."""
+        from .recent_artifacts import metadata, generation_request
+        self._authorize_panel_commit(token, panel, claim=False)
+        entry = metadata(self.api, ref, panel.identity['session_id'], panel.supplied)
+        missing = [key for key in ('title', 'tags', 'description') if key not in panel.supplied]
+        stamp = self.api.file_stamp(self.home, self.api.FileRef.model_validate(ref))
+        if missing:
+            if self.loop is None or not self.loop.is_running():
+                raise ValueError('Metadata generation unavailable. Supply title, #tags and --description explicitly.')
+            request = generation_request(self.api, panel.delivery, ref, panel.identity['session_id'])
+            async def generate():
+                if not await asyncio.to_thread(self._panel_current, token, panel):
+                    raise ValueError('Shelf session changed before metadata generation')
+                return await self.api.generate_draft(request, self.api.Store(self.home))
+            future = asyncio.run_coroutine_threadsafe(generate(), self.loop)
+            try:
+                result = future.result(timeout=self.api.GENERATION_TIMEOUT + 5)
+            except BaseException:
+                future.cancel()
+                raise
+            self._authorize_panel_commit(token, panel, claim=False)
+            # Presence, not truthiness: even a deliberately empty description wins.
+            entry = self.api.EntryInput.model_validate(entry.model_dump() | {
+                key: result['draft'][key] for key in missing})
+        if stamp != self.api.file_stamp(self.home, self.api.FileRef.model_validate(ref)):
+            raise ValueError('File changed during metadata generation. Nothing saved.')
+        self._authorize_panel_commit(token, panel, claim=False)
+        return entry, stamp
 
     def _save_recent(self, token, panel, index):
-        from .recent_artifacts import recent, candidates, metadata
-        ref = panel.candidates[index]
-        entry = metadata(self.api, ref, panel.identity['session_id'], panel.supplied)
+        from .recent_artifacts import recent, candidates
+        from pathlib import Path
+        refs = list(panel.candidates) if index == -1 else [panel.candidates[index]]
+        # MAX_FILES caps this loop at eight independent structured calls. A
+        # failure in any draft aborts before the single copied-byte transaction.
+        drafts = [self._recent_metadata(token, panel, ref) for ref in refs]
+        entry = drafts[0][0]
+        if len(refs) > 1:
+            payload = entry.model_dump() | {'files': refs, 'file': refs[0]}
+            if 'title' not in panel.supplied:
+                suffix = f' (+{len(refs)-1} files)'
+                payload['title'] = entry.title[:160-len(suffix)] + suffix
+            if 'description' not in panel.supplied:
+                payload['description'] = '\n'.join(
+                    Path(ref['path']).name + ': ' + draft.description
+                    for ref, (draft, _) in zip(refs, drafts))[:4000]
+            if 'tags' not in panel.supplied:
+                payload['tags'] = list(dict.fromkeys(tag for draft, _ in drafts for tag in draft.tags))[:20]
+            entry = self.api.EntryInput.model_validate(payload)
         def authorize():
             # Called after the catalog write reservation and current file-policy check.
             # Revalidate the read boundary first: a SQLite wait may outlive the
             # bound profile, owner, session or task. Do not consume until reads finish.
             self._authorize_panel_commit(token, panel, claim=False)
-            current = recent(self.home, self.profile, panel.identity['session_id'], cutoff=panel.delivery.cutoff)
+            current = recent(self.home, self.profile, panel.identity['session_id'], cutoff=panel.delivery.cutoff,
+                             count=panel.recent_count)
             self._authorize_panel_commit(token, panel, claim=False)
             if current != panel.delivery or candidates(self.api, self.home, current) != panel.candidates:
                 raise ValueError('Recent delivery changed. Use /shelf add again.')
+            for ref, (_, stamp) in zip(refs, drafts):
+                if stamp != self.api.file_stamp(self.home, self.api.FileRef.model_validate(ref)):
+                    raise ValueError('File changed before save. Nothing saved.')
             self._authorize_panel_commit(token, panel)
         saved, existing = self.api.Store(self.home).register_file_once(entry, authorize_commit=authorize)
+        if not self._panel_current(token, panel):
+            raise ValueError('Session changed; inspect saved deliveries before retrying')
         # Drop all old save callbacks, but leave a read-only detail action available.
         with self.lock:
             panel.consumed = False
-        text = ('Already saved to Delivery Shelf: ' if existing else 'Saved to Delivery Shelf: ') + saved['title']
+        if existing and saved.get('files', [saved['file']]) != refs:
+            text = ('The primary file is already saved with a different file set. Nothing overwritten. '
+                    'View saved file → Add version to approve a new version.')
+        else:
+            text = ('Already saved to Delivery Shelf: ' if existing else 'Saved to Delivery Shelf: ') + saved['title']
         return self._stage_keyboard(token, panel, text, [('View saved file', ('detail', saved['id']))])
 
 
@@ -791,6 +966,14 @@ class Controller:
         try:
             if not self.permitted(identity) or self.api.bound_home() != self.home:
                 return 'Delivery Shelf not saved: authorized current session and Telegram owner policy required.'
+            if self.application is None:
+                return NATIVE_UNAVAILABLE
+            count = None
+            selector = re.match(r'^r([0-9]+)(?:\s|$)', raw)
+            if selector:
+                if not re.fullmatch(r'[1-8]', selector[1]):
+                    raise ValueError('Use /shelf add r1 through r8. Nothing saved.')
+                count, raw = int(selector[1]), raw[selector.end():].strip()
             supplied = supplied_metadata(raw)
             with self.lock:
                 if self.epoch != epoch:
@@ -798,14 +981,14 @@ class Controller:
                 self.prune()
                 token = secrets.token_hex(12)
                 panel = Panel(identity.copy(), self.generation, time.monotonic()+TTL, busy=True,
-                              supplied=supplied, cancelled=cancelled)
+                              supplied=supplied, cancelled=cancelled, recent_count=count)
                 self.panels[token] = panel
             try:
-                self._load_recent(panel)
+                self._load_recent(token, panel)
                 if not self._panel_current(token, panel, epoch):
                     raise ValueError('Shelf session changed. Use /shelf add again.')
-                if len(panel.candidates) == 1:
-                    text, markup = self._save_recent(token, panel, 0)
+                if count is not None or len(panel.candidates) == 1:
+                    text, markup = self._save_recent(token, panel, -1 if count is not None else 0)
                 elif self.application is None:
                     raise ValueError('Several recent files found. Nothing saved. Open Saved → Delivery Shelf → Add and choose the file from this conversation.')
                 else:
@@ -821,9 +1004,20 @@ class Controller:
             return 'Delivery Shelf not saved: ' + str(exc.detail)
         except ValueError as exc:
             return str(exc)
+        except (OSError, TimeoutError, __import__('sqlite3').Error):
+            return 'Shelf · Unable to confirm save. Inspect /shelf before retrying; storage or generation failed.'
 
 
     async def add_recent(self, identity, raw='', epoch=None):
+        # Quick command capture is text-only; the host owns its one-line reply.
+        # The panel's Add action below remains the deliberate chooser workflow.
+        if not await asyncio.to_thread(self.permitted, identity):
+            return 'Delivery Shelf not saved: authorized current session and Telegram owner policy required.'
+        if self.application is None:
+            return NATIVE_UNAVAILABLE
+        return await self.add_recent_text(identity, raw, epoch)
+
+    async def _add_recent_panel(self, identity, raw='', epoch=None):
         cancelled = threading.Event()
         try:
             prepared = await asyncio.to_thread(self._prepare_recent, identity, raw, epoch, cancelled)
@@ -842,6 +1036,10 @@ class Controller:
         try:
             if not await asyncio.to_thread(self._panel_current, token, panel, epoch):
                 return 'Shelf session changed; inspect saved deliveries before retrying.'
+            with self.lock:
+                if (self.panels.get(token) is not panel or not self.alive or
+                        self.epoch != epoch or panel.expires <= time.monotonic() or panel.cancelled.is_set()):
+                    return 'Shelf session changed; inspect saved deliveries before retrying.'
             message = await application.bot.send_message(**kwargs)
             return await asyncio.to_thread(self._finish_send, token, panel, message, epoch, text, None)
         except BaseException:
@@ -852,13 +1050,30 @@ class Controller:
     def _perform(self, token, panel, action, value, publication=None):
         if not self._panel_current(token, panel):
             return None
+        if action in ('versions', 'version'):
+            return self._versions_keyboard(token, panel, value, selected=action == 'version')
+        if action == 'add_version':
+            entry = self.api.Store(self.home).get(value[0])
+            if entry['revision'] != value[1]:
+                raise ValueError('Delivery changed. Open /shelf again.')
+            panel.version_target = entry
+            panel.recent_count = None  # A new button action is not the old rN command.
+            panel.version_selection, panel.version_stamps = [], []
+            self._load_recent(token, panel)
+            return (self._choose_recent(token, panel) if len(panel.candidates) > 1 else
+                    self._confirm_version(token, panel, 0))
+        if action == 'commit_version':
+            return self._commit_version(token, panel)
         if action in ('add', 'save_recent'):
             from fastapi import HTTPException
             from pydantic import ValidationError
             try:
                 if action == 'add':
+                    panel.version_target = None
+                    panel.recent_count = None
+                    panel.supplied = {}  # A new Add action is a fresh metadata request.
                     try:
-                        self._load_recent(panel)
+                        self._load_recent(token, panel)
                     except ValidationError:
                         return 'Delivery Shelf not saved: recent file or metadata is unsupported by the current policy.', None
                     except ValueError as exc:
@@ -867,6 +1082,8 @@ class Controller:
                         return None
                     if len(panel.candidates) > 1:
                         return self._choose_recent(token, panel)
+                if panel.version_target:
+                    return self._confirm_version(token, panel, value)
                 return self._save_recent(token, panel, 0 if action == 'add' else value)
             except (ValueError, HTTPException, ValidationError):
                 # No automatic retry; source/policy may have changed or readback may be ambiguous.
@@ -897,8 +1114,10 @@ class Controller:
                                    authorize_commit=lambda: self._authorize_panel_commit(token, panel))
             verified = store.get(old['id'])
             if verified != updated or verified['revision'] != old['revision'] + 1 or verified['file'] != offer['file'] or any(
-                    verified[k] != old[k] for k in self.api.EntryInput.model_fields if k != 'file'):
+                    verified[k] != old[k] for k in self.api.EntryInput.model_fields if k not in ('file', 'files')):
                 raise ValueError('Readback changed; inspect the registration before retrying')
+            if not self._panel_current(token, panel):
+                raise ValueError('Session changed; inspect the registration before retrying')
             return 'Shelf · Updated\n' + verified['title'] + '\nID: ' + verified['id'], None
 
     def _release(self, panel, terminal=False):
@@ -922,12 +1141,14 @@ class Controller:
             if action == 'page' and publication is None:
                 await query.answer('Shelf list update in progress. Try again.', show_alert=True)
                 return
-            await query.answer('Sending file…' if action == 'download' else None)
-            if action == 'download':
+            await query.answer('Sending file…' if action in ('download', 'download_set') else None)
+            if action in ('download', 'download_set'):
                 # Claim the specific action once, including ambiguous POST outcomes.
                 with self.lock:
                     panel.actions = {k: v for k, v in panel.actions.items() if v != (action, value)}
-                result = await self.download(panel.identity, [value], panel_token=token, panel=panel)
+                selections = (await asyncio.to_thread(self._version_downloads, panel.identity, value)
+                              if action == 'download_set' else [value])
+                result = await self.download(panel.identity, selections, panel_token=token, panel=panel)
                 await query.edit_message_text(text=result, reply_markup=None, parse_mode=None)
                 return
             result = await asyncio.to_thread(self._perform, token, panel, action, value, publication)
@@ -935,6 +1156,13 @@ class Controller:
                 text, markup = result
                 if publication is not None and not self._publication_current(publication):
                     return
+                if markup is not None:
+                    if not await asyncio.to_thread(self._panel_current, token, panel):
+                        return
+                    with self.lock:
+                        if (self.panels.get(token) is not panel or not self.alive or
+                                panel.expires <= time.monotonic() or panel.generation != self.generation):
+                            return
                 started = True
                 message = await query.edit_message_text(text=text, reply_markup=markup, parse_mode=None)
                 acknowledged = await asyncio.to_thread(self._finish_edit, token, panel, message, text, publication)

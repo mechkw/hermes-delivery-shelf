@@ -8,12 +8,10 @@ import sys
 import tempfile
 from contextlib import closing
 from native_probe import host, ROOT
-
-IDS = ('conversation-bookmarks', 'delivery-shelf')
+from saved_fixture_repos import IDS, saved_repos
 scenario = sys.argv[3]
 frontend_mode, scenario = scenario.split('--', 1) if '--' in scenario else ('matched', scenario)
-peer = Path(os.environ.get('SAVED_PEER_REPO', ROOT.parent / ('hermes-delivery-shelf' if ROOT.name.endswith('bookmarks') else 'hermes-conversation-bookmarks')))
-repos = {ROOT.name.removeprefix('hermes-'): ROOT, peer.name.removeprefix('hermes-'): peer}
+repos = saved_repos(ROOT, os.environ.get('SAVED_PEER_REPO'))
 installed = list(IDS)
 if scenario.endswith('-only'):
     installed = [scenario.removesuffix('-only')]

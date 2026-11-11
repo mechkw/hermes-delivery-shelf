@@ -129,7 +129,12 @@ class MultisurfaceAddTests(unittest.IsolatedAsyncioTestCase):
             self.controller.close()
             return result
         with patch.object(self.api.Store, 'register_file_once', completed):
-            text = await self.command()
+            # Complete metadata reaches commit without requiring the Agent runtime.
+            text = await self.command('add Exact #Keep --description "Literal."')
+        saved = self.store.search()['items']
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]['title'], 'Exact')
+        self.assertEqual(self.store.get(saved[0]['id']), saved[0])
         self.assertIn('Unable to confirm', text)
         self.assertNotIn('not saved', text)
         self.assertEqual(self.store.search()['total'], 1)

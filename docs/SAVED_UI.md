@@ -79,6 +79,22 @@ SAVED_PEER_REPO=/path/to/the-other-repository \
 SAVED_PROOF_DIR=/path/to/fictional-proof npm run test:saved
 ```
 
+`test:saved` and its Python fixture resolve both plugin identities from
+`plugin.yaml` (`conversation-bookmarks` and `delivery-shelf`), not checkout folder
+names. `SAVED_PEER_REPO` may point to any checkout basename. Without it, the peer
+is sought in the conventional sibling `hermes-<other-plugin-id>` directory,
+selected from the root manifest. Missing, unsupported or duplicate identities
+are rejected before fixture copies, including single-plugin scenarios. The
+Node runner uses the same Python resolver and passes its selected peer to the
+server; role-specific source pins also use manifest identities.
+
+The deterministic setup regression needs Python with the existing CI PyYAML
+dependency and Node, but no native host, browser or network:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p 'test_saved_fixture_repos.py' -v
+```
+
 `test:browser` preserves the existing single-plugin CRUD, conflict, tag,
 preview/download or session-open, theme, responsive and stale-callback tests.
 Screenshots now default to the disposable test directory instead of overwriting
@@ -112,13 +128,47 @@ restart, publish, or artwork changes are part of this work.
 
 ## CI versus paired local coverage
 
-`.github/workflows/verify.yml` invokes `scripts/verify.sh`: single-repository
-source/native/backend and single-plugin browser regressions. It does **not** run
-the paired Saved matrix. No published companion revision is assumed to contain
-these unpublished changes; a green CI job is not shared-matrix evidence.
+`.github/workflows/verify.yml` invokes the unchanged `scripts/verify.sh` gate:
+source/native/backend checks, builds, then `test:browser`. The latter delegates
+to the paired Saved runner, filtered to **both enabled**: Dashboard and Desktop,
+each in both load orders (four top-level cases, including the detailed browser
+regressions). It is not a standalone single-plugin fixture and needs Bookmarks.
+CI does **not** run the unfiltered 34-case matrix.
 
-For paired verification, prepare both matching local checkouts with their npm
-dependencies, then run (replace the three absolute paths):
+CI prepares public Bookmarks commit
+`3f70841a5037c31bfa03234331dc88528c5911e5` from
+`https://github.com/mechkw/hermes-conversation-bookmarks.git`, never a moving
+branch or overlaid local peer. `scripts/prepare-ci-browser.py` independently
+installs its frozen npm lock and builds it, and exports `SAVED_PEER_REPO` through
+`GITHUB_ENV`. Shared `Saved.jsx`, coordinator and CSS must remain byte-identical.
+Only this repository's `tests/saved_browser_server.py` is spawned; the unused
+peer fixture may have product-specific copied-file lists. Both fixture files,
+all browser helpers and copied backend sources are hashed and checked unchanged
+across execution; removing unused-server equality does not relax UI equality.
+
+The same pinned official v0.22.5 checkout supplies backend and UI. CI installs
+its frozen npm lock with lifecycle scripts disabled, then builds renderer assets
+through its own Vite/Tailwind configuration. This supplies real Desktop CSS and
+Dashboard's compiler dependencies without Electron, live-host dependencies or a
+custom SDK. The helper verifies public SDK exports through `realUI` and refuses
+an incompatible host. The cold-serve regression also needs the official HTTP
+transport SDK: OpenAI/distro/jiter/sniffio/tqdm versions come from that host's
+`uv.lock`, installed with `--no-deps` alongside unchanged exact
+`tests/requirements-ci.txt` versions. Its tests use only a fictional loopback
+provider, not credentials or external inference.
+
+Homes, Hermes/runtime/cache directories, browser downloads and the host/peer
+checkouts live under the job's disposable scratch root. Normal tests disable
+lazy installs with `HERMES_DISABLE_LAZY_INSTALLS=1`; the install-lifecycle fixture
+intentionally constructs a separately sanitized disposable environment and
+exercises the actual native installer. CI retains a compressed complete
+source/dependency input inventory and browser proof artifacts before cleanup.
+The browser runner launches genuine headless Chromium; this is not headful
+Desktop/Electron or production-shell acceptance. Preservation metadata remains
+a separate Python 3.11 / Unicode-14 job; the main gate uses Python 3.14.7.
+
+For the full paired verification, prepare both matching local checkouts with
+their npm dependencies, then run (replace the three absolute paths):
 
 ```sh
 export HERMES_SOURCE=/absolute/path/to/official-hermes-v0.22.5
@@ -134,9 +184,10 @@ npm run test:saved
 
 Set `PYTHON` to an existing runtime containing `tests/requirements-ci.txt` when
 needed. The paired runner fails before launching fixtures if the companion or
-built assets are missing, or mirrored shared source/tests differ. It pins UI,
-bundles, UI docs and harnesses across execution, not concurrently edited Python
-command/backend files. Save the resulting `results.json` with review evidence.
+built assets are missing, or the shared UI protocol differs. It pins browser
+helpers, fixtures and both products' UI/backend sources across execution; CI's
+preparation inventory additionally records the official host/dependency trees.
+Save the resulting `results.json` with review evidence.
 
 References:
 - https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk

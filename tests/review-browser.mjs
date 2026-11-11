@@ -35,14 +35,45 @@ export async function sourceDetailCases(page,adapter,api,sourceBank){
  console.log('PASS review source detail',adapter,'exact refs/copy, named-profile resume, pruned refs, no editor ID inputs');
 }
 
+// A visible title can belong to the previous list commit: Refresh schedules a
+// passive-effect reload which temporarily disconnects every card. Own the active
+// collection and observe that reload's loading -> settled commit before measuring.
+export async function refreshCollection(page,id){
+ const bookmarks=id==='conversation-bookmarks';
+ if(!bookmarks&&id!=='delivery-shelf')throw new Error('Unknown Saved collection: '+id);
+ const collection=page.locator(bookmarks?'.cb-bookmarks':'.ds-shelf');
+ const summary=collection.locator(bookmarks?'.cb-toolbar > span':'.ds-toolbar > span');
+ const settled=bookmarks?/^\d+ bookmarks?$/:/^\d+ (delivery|deliveries)$/;
+ await expect(collection).toBeVisible();
+ await expect(summary).toHaveText(settled);
+ // Arm before clicking: polling only after click can miss a fast loading commit.
+ const cycle=await summary.evaluateHandle((node,{loading,pattern})=>{
+  const state={node,started:false,done:false};
+  const observer=new MutationObserver(()=>{
+   const text=node.textContent;
+   if(text===loading)state.started=true;
+   else if(state.started&&new RegExp(pattern).test(text))state.done=true;
+  });
+  observer.observe(node,{childList:true,subtree:true,characterData:true});
+  state.stop=()=>observer.disconnect();return state;
+ },{loading:bookmarks?'Loading bookmarks…':'Loading your shelf…',pattern:settled.source});
+ try{
+  await collection.getByRole('button',{name:'Refresh',exact:true}).click();
+  await page.waitForFunction(state=>state.done||!state.node.isConnected,cycle,{timeout:5000});
+  expect(await cycle.evaluate(state=>state.node.isConnected)).toBe(true);
+  await expect(summary).toHaveText(settled);
+ }finally{await cycle.evaluate(state=>state.stop());await cycle.dispose();}
+}
+
 export async function titleBoundsCases(page,adapter,api,proof){
  await page.setViewportSize({width:360,height:640});
  const evidence=[];
  for(const id of ['conversation-bookmarks','delivery-shelf']){
   await page.getByRole('tab',{name:id==='conversation-bookmarks'?'Bookmarks':'Deliverables',exact:true}).click();
+  await refreshCollection(page,id);
   for(const title of ['UnbrokenTitle'.repeat(12),'A long card title with words that must wrap instead of overflowing the collection card at a narrow viewport '.repeat(2).slice(0,160)]){
    const entry=await api(id,'/entries',{method:'POST',body:JSON.stringify({title,...(id==='conversation-bookmarks'?{session_id:'fictional-session-01'}:{})})});
-   await page.getByRole('button',{name:'Refresh',exact:true}).click();
+   await refreshCollection(page,id);
    const button=page.getByRole('button',{name:title,exact:true});await expect(button).toBeVisible();await button.scrollIntoViewIfNeeded();
    const bounds=await button.evaluate(node=>{
     const range=document.createRange();range.selectNodeContents(node);
@@ -58,7 +89,7 @@ export async function titleBoundsCases(page,adapter,api,proof){
    await page.screenshot({path:join(proof,`title-${adapter}-${id}.png`),fullPage:true});
    await api(id,`/entries/${entry.id}?revision=${entry.revision}`,{method:'DELETE'});
   }
-  await page.getByRole('button',{name:'Refresh',exact:true}).click();
+  await refreshCollection(page,id);
  }
  await page.setViewportSize({width:1440,height:1100});
  console.log('PASS review title bounds',adapter,'both panels, worded/unbroken titles, 360px button AND text rects');

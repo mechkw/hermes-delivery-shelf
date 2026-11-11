@@ -6,12 +6,28 @@ on:
 permissions:
   contents: read
 jobs:
+  preservation-metadata:
+    name: Preservation metadata (Python 3.11 / Unicode 14)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify real Unicode-14 runtime and complete metadata test manifest
+        run: python scripts/verify-preservation-metadata.py
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       HERMES_DISABLE_TELEMETRY: '1'
+      HERMES_DISABLE_LAZY_INSTALLS: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           scratch="$RUNNER_TEMP/shelf"
-          mkdir -p "$scratch/account/.hermes" "$scratch/cache"
+          mkdir -p "$scratch/account/.hermes" "$scratch/cache" "$scratch/runtime"
           git clone --filter=blob:none --no-checkout https://github.com/NousResearch/hermes-agent.git "$scratch/hermes"
           # Official v0.22.5, peeled annotated tag, not a local/custom Hermes head.
           git -C "$scratch/hermes" checkout --detach bf0203a794a07aac3ff764972ab9087baa4e4f4e
@@ -39,6 +55,12 @@ jobs:
             echo "HOME=$scratch/account"
             echo "HERMES_HOME=$scratch/account/.hermes"
             echo "XDG_CACHE_HOME=$scratch/cache"
+            echo "HERMES_RUNTIME_DIR=$scratch/runtime"
+            echo "PLAYWRIGHT_BROWSERS_PATH=$scratch/browsers"
+            echo "npm_config_cache=$scratch/cache/npm"
+            echo "UV_CACHE_DIR=$scratch/cache/uv"
+            echo "GIT_CONFIG_GLOBAL=/dev/null"
+            echo "GIT_CONFIG_NOSYSTEM=1"
           } >> "$GITHUB_ENV"
       - name: Test dependencies and Chromium
         run: |
@@ -47,7 +69,21 @@ jobs:
           echo "PYTHON=$TMPDIR/test-venv/bin/python" >> "$GITHUB_ENV"
           npm ci
           npx playwright install --with-deps chromium
+      - name: Pinned public Bookmarks peer and official native UI/CSS
+        run: '"$PYTHON" scripts/prepare-ci-browser.py'
       - name: Source, native HTTP, Doctor, builds and browser contracts
         run: bash scripts/verify.sh
       - name: Native install lifecycle and unified Desktop synchronization
         run: '"$PYTHON" tests/install_lifecycle.py'
+      - name: Retain exact input inventory and real browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shelf-ci-browser-proof
+          path: |
+            ${{ runner.temp }}/shelf/ci-browser-inputs.json.gz
+            ${{ runner.temp }}/shelf/saved-ui-proof/
+          if-no-files-found: warn
+      - name: Remove disposable host, homes and browser payloads
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/shelf"

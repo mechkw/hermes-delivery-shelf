@@ -9,7 +9,8 @@ import {shelfRedesignCases,shelfGenerationFenceCases} from './shelf-redesign-bro
 import {selectorCases} from './selector-browser.mjs';
 import {sourceDetailCases,titleBoundsCases,focusEditorCases} from './review-browser.mjs';
 import {sourceFixture} from './native-source-fixture.mjs';
-import {mkdtemp, readFile, rm, mkdir, writeFile} from 'node:fs/promises';
+import {savedRepos,savedRoleFiles} from './saved-repos.mjs';
+import {mkdtemp, readFile, readdir, rm, mkdir, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
@@ -23,18 +24,20 @@ const backendSource=process.env.HERMES_SOURCE||join(process.env.HOME,'.hermes/he
 // read-only UI checkout is allowed, recorded separately from the backend host.
 const source=process.env.HERMES_UI_SOURCE||backendSource;
 const proof=process.env.SAVED_PROOF_DIR||join(process.env.TMPDIR||tmpdir(),'saved-ui-proof');
+// The resolver returns root then peer, keyed by validated plugin.yaml identities.
+const repos=savedRepos(root);
+const peer=Object.values(repos)[1];
 await mkdir(proof,{recursive:true});
-const peer=process.env.SAVED_PEER_REPO||resolve(root,'..',root.endsWith('bookmarks')?'hermes-delivery-shelf':'hermes-conversation-bookmarks');
 // Fail before starting a browser/server, rather than silently testing old or absent UI.
 for(const repo of [root,peer]){
  try{for(const file of ['ui/Saved.jsx','desktop/plugin.js','dashboard/dist/index.js','tests/saved-browser.mjs'])await readFile(join(repo,file));}
  catch{throw new Error('Paired Saved verification requires both built local repositories. Set SAVED_PEER_REPO; see docs/SAVED_UI.md. Missing inputs in '+repo);}
 }
-// Shared protocol and server fixture must agree. Product-owned scenario runners
-// need not be byte-identical: released Bookmarks has additional editor/generation
-// cases. Both runners and all consumed test modules remain pinned below.
-for(const file of ['ui/Saved.jsx','ui/saved-coordinator.js','tests/saved_browser_server.py']){
- if(!(await readFile(join(root,file))).equals(await readFile(join(peer,file))))throw new Error('Paired Saved revisions differ: '+file+'. Build matching local changes; CI does not fetch an unpublished companion. See docs/SAVED_UI.md.');
+// Only the shared UI protocol must be byte-identical. The server spawned below
+// is ROOT's fixture, never the peer's: product-specific copied backend files may
+// differ. Both fixtures/runners and the consumed sources remain pinned below.
+for(const file of ['ui/Saved.jsx','ui/saved-coordinator.js','ui/saved.css']){
+ if(!(await readFile(join(root,file))).equals(await readFile(join(peer,file))))throw new Error('Paired Saved shared protocol differs: '+file+'. Use the pinned compatible peer; see docs/SAVED_UI.md.');
 }
 const scratch=await mkdtemp(join(process.env.TMPDIR||tmpdir(),'q-'));
 const port=await new Promise(r=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>r(p));});});
@@ -134,8 +137,20 @@ const stubPlugin={name:'host-boundary-doubles',setup(b){
  b.onLoad({filter:/.*/,namespace:'qa'},args=>({contents:({keybind:'export const useKeybindHint=()=>null;',hermes:'export const getHermesConfigRecord=async()=>({}),retainConfigReadOrigin=x=>x,saveHermesConfig=async()=>({ok:true});',api:apiStub,profile:'export const dashboardServingProfile=()=>"default";',utils:'export const cn=(...a)=>a.join(" "),timeAgo=()=>"",isoTimeAgo=()=>"";',i18n:'export const useI18n=()=>({t:{}});',sdk:sdkStub,fs:'export const isReadFileErrorResult=()=>false;',notifications:'export const notifyError=(e)=>{throw e;};',events:'export const trackGatewayEventDisposers=(track,fn)=>fn();',plugin:contextStub})[args.path],loader:'js',resolveDir:root}));
 }};
 const pins={};
+// Include transitive browser helpers and every copied backend source, not just
+// the shared protocol. The CI preparation inventory additionally binds the
+// complete official source/dependency trees and generated native CSS.
+async function pinSources(directory){
+ for(const entry of await readdir(directory,{withFileTypes:true})){
+  if(['.git','node_modules','__pycache__'].includes(entry.name))continue;
+  const file=join(directory,entry.name);
+  if(entry.isDirectory())await pinSources(file);
+  else if(entry.isFile()&&(/\.(py|mjs|js|jsx|css|json|yaml)$/.test(entry.name)||entry.name==='VERSION'))pins[file]=createHash('sha256').update(await readFile(file)).digest('hex');
+ }
+}
+for(const repo of [root,peer])await pinSources(repo);
 for(const file of ['ui/ShelfEditor.jsx','ui/ArtifactCard.jsx','dashboard/artifact_source.py','dashboard/native_history.py','tests/shelf-redesign-browser.mjs'])pins[join(root,file)]=createHash('sha256').update(await readFile(join(root,file))).digest('hex');
-for(const repo of [root,peer])for(const file of ['desktop/plugin.js','dashboard/dist/index.js','dashboard/manifest.json','ui/Saved.jsx','ui/saved-coordinator.js','ui/saved.css','ui/desktop.jsx','ui/dashboard.jsx',repo.endsWith('bookmarks')?'ui/Bookmarks.jsx':'ui/Shelf.jsx','tests/saved-browser.mjs','tests/saved_browser_server.py','ui/presentation.desktop.jsx','ui/presentation.dashboard.jsx','ui/collection-focus.js','ui/style.css',...(repo.endsWith('bookmarks')?['ui/BookmarkEditor.jsx']:[]),'tests/review-browser.mjs','tests/selector-browser.mjs','tests/metadata-browser.mjs','tests/native-components.mjs'])pins[join(repo,file)]=createHash('sha256').update(await readFile(join(repo,file))).digest('hex');
+for(const [id,repo] of Object.entries(repos))for(const file of ['desktop/plugin.js','dashboard/dist/index.js','dashboard/manifest.json','ui/Saved.jsx','ui/saved-coordinator.js','ui/saved.css','ui/desktop.jsx','ui/dashboard.jsx',...savedRoleFiles(id),'tests/saved-browser.mjs','tests/saved_browser_server.py','ui/presentation.desktop.jsx','ui/presentation.dashboard.jsx','ui/collection-focus.js','ui/style.css','tests/review-browser.mjs','tests/selector-browser.mjs','tests/metadata-browser.mjs','tests/native-components.mjs'])pins[join(repo,file)]=createHash('sha256').update(await readFile(join(repo,file))).digest('hex');
 for(const repo of [root,peer])for(const file of ['__init__.py','plugin.yaml','dashboard/plugin_api.py','tests/native_probe.py','tests/native-source-fixture.mjs'])pins[join(repo,file)]=createHash('sha256').update(await readFile(join(repo,file))).digest('hex');
 for(const file of ['hermes_cli/web_server.py','hermes_cli/web_server_dashboard.py','hermes_state.py'])pins[join(backendSource,file)]=createHash('sha256').update(await readFile(join(backendSource,file))).digest('hex');
 for(const file of ['web/src/plugins/registry.ts','web/src/plugins/slots.ts','web/src/plugins/usePlugins.ts','apps/desktop/src/contrib/runtime-loader.ts','apps/desktop/src/contrib/registry.ts','apps/desktop/src/contrib/plugins-store.ts','apps/desktop/src/sdk/index.ts'])pins[join(source,file)]=createHash('sha256').update(await readFile(join(source,file))).digest('hex');
@@ -214,7 +229,7 @@ try{
  browser=await chromium.launch({headless:true});
  const base=`http://127.0.0.1:${port}`;
  for(const scenario of (process.env.SAVED_SCENARIOS?.split(',')||['both','conversation-bookmarks-only','delivery-shelf-only','conversation-bookmarks-disabled','delivery-shelf-disabled','both-disabled','ui-both--conversation-bookmarks-disabled','ui-both--delivery-shelf-disabled','ui-both--both-disabled','ui-bookmarks--both','ui-shelf--both'])){
-  server=spawn(process.env.PYTHON||'python',['tests/saved_browser_server.py',String(port),scratch,scenario],{cwd:root,env:{...process.env,PYTHONDONTWRITEBYTECODE:'1',HERMES_SOURCE:backendSource},stdio:['ignore','pipe','pipe']});
+  server=spawn(process.env.PYTHON||'python',['tests/saved_browser_server.py',String(port),scratch,scenario],{cwd:root,env:{...process.env,PYTHONDONTWRITEBYTECODE:'1',HERMES_SOURCE:backendSource,SAVED_PEER_REPO:peer},stdio:['ignore','pipe','pipe']});
   let logs='';server.stderr.on('data',b=>logs+=b);
   for(let n=0;n<150;n++){try{if((await fetch(base+'/qa/dashboard')).ok)break;}catch{}if(server.exitCode!==null)throw new Error(logs);await new Promise(r=>setTimeout(r,100));if(n===149)throw new Error('Server failed: '+logs);}
   const sourceBank=scenario==='both'?await sourceFixture(scratch):null;

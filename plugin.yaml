@@ -9,11 +9,14 @@ provides_tools:
   - delivery_shelf_search
   - delivery_shelf_update
   - delivery_shelf_offer_update
+  - delivery_shelf_respond_update
 provides_hooks:
   - on_session_reset
   - on_session_delete
+  - pre_llm_call
 provides_commands:
   - shelf
 python_dependencies:
   - "fastapi>=0.115,<1"
   - "pydantic>=2.8,<3"
+  - "Pillow>=10.4,<14"

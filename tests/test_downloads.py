@@ -520,18 +520,42 @@ class DownloadTests(TelegramTests):
         await self.command('search Fictional')
         started, release = threading.Event(), threading.Event()
         original = self.controller._file_snapshot
+        to_thread = asyncio.to_thread
+        worker = None
         def waiting(selection):
             started.set()
-            release.wait(5)
+            if not release.wait(5): raise AssertionError('read barrier timed out')
             return original(selection)
-        with patch.object(self.controller, '_file_snapshot', side_effect=waiting):
+        async def tracked_to_thread(func, *args, **kwargs):
+            nonlocal worker
+            if func is snapshot:
+                # Cancellation cannot stop the thread. Keep its awaitable alive
+                # so teardown can join it and observe any worker exception.
+                worker = asyncio.create_task(to_thread(func, *args, **kwargs))
+                return await asyncio.shield(worker)
+            return await to_thread(func, *args, **kwargs)
+        with patch.object(self.controller, '_file_snapshot', side_effect=waiting) as snapshot, \
+                patch.object(asyncio, 'to_thread', side_effect=tracked_to_thread):
             task = asyncio.create_task(self.command('dl 1'))
-            await asyncio.to_thread(started.wait, 2)
-            self.assertTrue(started.is_set())
-            await asyncio.sleep(0)  # real heartbeat while read blocked
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError): await task
-            release.set()
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                heartbeat = asyncio.Event()
+                asyncio.get_running_loop().call_soon(heartbeat.set)
+                await asyncio.wait_for(heartbeat.wait(), 2)
+                self.assertFalse(release.is_set())  # heartbeat while read blocked
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError): await task
+                self.assertFalse(self.capture.uploads)
+                self.assertFalse(self.controller.download_busy)
+            finally:
+                release.set()
+                if not task.done(): task.cancel()
+                try:
+                    try: await asyncio.wait_for(task, 3)
+                    except asyncio.CancelledError: pass
+                finally:
+                    if worker is not None:
+                        await asyncio.wait_for(asyncio.shield(worker), 3)
         self.assertFalse(self.capture.uploads)
         self.assertFalse(self.controller.download_busy)
     async def test_close_and_reconnect_during_ack_fence_send(self):

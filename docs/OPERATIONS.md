@@ -1,288 +1,116 @@
-# Setup and everyday operation
+# Operate Delivery Shelf
 
-[← README](../README.md) · [Technical guide](TECHNICAL.md)
+[README](../README.md) · [Installation](INSTALLATION.md) · [Usage](USAGE.md) · [Technical reference](TECHNICAL.md)
 
-## Install and enable
+## Install on the intended host
 
-```sh
-hermes plugins install mechkw/hermes-delivery-shelf --enable
-hermes plugins list
-```
+Use the [installation guide](INSTALLATION.md) for native Desktop, web Dashboard, and remote component pairing. Check the connected backend and profile before saving. In native Desktop, open **Saved → Deliverables**. Installing backend Python code alone does not install a remote client's Desktop UI.
 
-This installs from the public Git repository. It is not a claim of inclusion in the
-Hermes plugin catalog. Hermes can ask for dependency or capability consent during
-installation. The repository name is `hermes-delivery-shelf`; the installed plugin
-ID is **`delivery-shelf`**.
+Do not expose a separate plugin server or disable Hermes authentication. Browser-hosted Desktop is not the web Dashboard and does not establish native plugin support.
 
-If a Dashboard server was already running, restart that server so its Python backend
-can mount the new routes, then refresh the page. In Desktop, rescan through
-**Capabilities → Plugins** and check both Agent and Desktop enablement, then open
-**Saved → Deliverables**. For a remote backend, use the native Git installer below;
-Rescan alone does not install the local UI. You do not need to compile JavaScript.
+## Save and retrieve a delivery
 
-## Remote Desktop setups
+1. In the conversation that received files, run `/shelf add`.
+2. Wait for the saved or already-saved confirmation.
+3. Open **Saved → Deliverables**, then inspect the delivery and download a selected file/version.
 
-A Desktop app and its connected backend can run on different computers. Installing
-backend Python code on a server does not automatically put a UI on your laptop.
+Bare `/shelf` browses without saving. `/shelf add r1` saves the newest recognized file. `/shelf add r3` saves the newest three recognized files as one delivery. Missing metadata uses configured generation when enabled. No source discovery scans folders. See [command syntax](COMMANDS.md) and [recent-source limits](DETERMINISTIC_ADD.md).
 
-1. In the **native Desktop app**, connect to the intended backend and profile.
-2. Open **Capabilities → Plugins → Install from Git** and enter
-   `https://github.com/mechkw/hermes-delivery-shelf`. The native installer installs the
-   Desktop UI locally and the Agent half on the selected backend, subject to normal
-   consent. No JavaScript compilation is required.
-3. Verify both **Desktop** and **Agent** switches are enabled, then open
-   **Saved → Deliverables** and check the displayed profile.
+If native automatic Add reports that it cannot propagate caller cancellation in an isolated plugin host, leave isolation unchanged and use manual Add.
 
-If the backend was installed first, **“unavailable (remote backend)”** means the
-paired local Desktop half is missing. Rescan alone cannot copy files from the
-remote server. Use the native Git installer above; do not copy a bare `plugin.js`,
-which lacks the installer's package-pairing metadata.
+For manual native capture, select **Add delivery**, choose the conversation and files, review metadata, then select **Save**. **Generate** only fills a draft. Use **Add version** for a known delivery's next edition; a metadata edit does not refresh same-path file bytes.
 
-Some Hermes builds report **“already installed”** for the Agent half while still
-installing the local Desktop half. Inspect both switches afterward: the Desktop
-half may need to be enabled explicitly. Do not force-reinstall or uninstall a
-working backend just to clear this message. If the local half remains absent,
-retain the installer error for diagnosis rather than treating the install as done.
+A legacy **Original-file link** still needs the original. A preserved version uses managed copies. Test an actual version download before relying on the collection as a record of delivered bytes.
 
-### Browser-hosted Desktop versus Dashboard
+## Approve another root
 
-The currently inspected browser-hosted Desktop bridge lacks external Desktop
-plugin loading and installation. It is not the separately supported web Dashboard.
-Use native Desktop or the authenticated Dashboard for this plugin's Saved panel;
-installing the backend alone does not add that panel to browser-hosted Desktop.
-No additional public port or unauthenticated endpoint is needed.
+Only an operator should edit source-root policy. Narrow the scope to a delivery directory on the backend.
 
-The Dashboard runs beside its backend, so its UI and backend package share the same
-installation. A responsive Dashboard page is the mobile view; this project does not
-install a native Android or iOS application.
-
-Keep your existing Hermes authentication. The plugin does not create a public file
-server or require new inbound ports.
-
-## Telegram and chat slash commands
-
-```text
-/shelf
-/shelf launch
-/shelf search add
-/shelf add --file workspaces:launch/report.pdf
-/shelf add Approved artwork #branding, plugins --file "workspaces:launch/approved artwork.png"
-/shelf add Approved artwork #branding --description "Selected release hero." --file workspaces:launch/hero.webp
-```
-
-**Telegram quick save:** `/shelf add` or the panel's **Add** saves a recent file
-without a model call. One file saves directly; several open a chooser. Existing
-registrations are kept unchanged. The default title is the filename, with empty
-tags and description; optional supplied fields are preserved. Add recognizes
-explicit `MEDIA:` references in the active conversation segment. If a delivery is
-older, compressed away or otherwise unavailable, ask Hermes to save it in normal chat.
-See [source limits](DETERMINISTIC_ADD.md).
-
-**Advanced `--file` saves: supply as little metadata as you like.** The current Hermes agent generates any
-missing title, tags and description using the conversation and selected filename,
-saves the entry, verifies it, and confirms the saved details in one short reply.
-It preserves anything you supply rather than asking you to fill out a form. Supplying
-all three fields saves directly without an agent turn. An explicit empty description
-(`--description ""`) is preserved; an empty tag section is invalid.
-
-**Telegram setup:** [owner policy, inline panels, derivative offers and exact limits](TELEGRAM.md).
-The configured Telegram bare command shows attached inline rows; unavailable/isolated
-hosts retain an explicitly labeled text fallback. A query lists up to 20 matches.
-`add`, `search`, and `help` are reserved leading commands. Use `/shelf search <query>`
-when a query begins with a reserved word; `/shelf help` shows syntax.
-
-Ordinary Telegram Add never scans folders or selects by modification time.
-The advanced explicit `--file`
-reference is `<approved-root-alias>:<relative-path>` on the backend,
-not a Telegram file ID or a path on your phone. Quote references containing spaces.
-All existing file safety and approved-root checks still apply.
-
-The optional title is unquoted free text; apostrophes and `C#` are preserved. A
-whitespace-separated `#` starts comma-separated tags. Use `--description "text"` for
-an explicit description, with `--file` and `--description` after the title/tag portion
-in either order. Empty tags are rejected. Use the UI or native tool for tags containing
-literal commas. Tags retain their first spelling/case after boundary trimming and
-case-insensitive deduplication. Tag filters remain case-insensitive, including older
-lowercase entries; existing entries are not rewritten.
-
-Fully specified `--file` saves default to the `document` kind. Use the UI or
-structured tool to set kind, project, or other fields. Saving alone does not send
-file bytes. To retrieve them, choose an entry → **Send file**, `/shelf dl 1` from an
-acknowledged numbered list, or `/shelf r1` through `/shelf r5` for recent attachments.
-These retrieval paths need no model or injection consent.
-
-### Enable agent-assisted metadata
-
-Enable the plugin normally, then grant native handoff permission in the intended
-profile once:
-
-```sh
-hermes config set plugins.entries.delivery-shelf.allow_gateway_injection true
-```
-
-This is optional for advanced `--file` metadata completion; ordinary Telegram Add
-and retrieval do not need it. It permits that advanced command to hand work to the existing Hermes
-agent in the invoking session. The plugin does not create another model client or
-collect transcripts; the normal agent/provider processes its conversation context.
-Normal inference costs apply to assisted saves. Searches and fully specified saves
-remain model-free.
-
-If native session context or handoff permission is unavailable, nothing is saved and
-the command explains the problem. Queue acceptance is not completion: the agent's
-final response comes after saving and checking the actual entry. No placeholder card
-or optimistic success message is created while waiting.
-
-## Attach a file
-
-File references contain a **root alias** and a **relative path**, not an arbitrary
-absolute path supplied by a browser.
-
-The default aliases are:
-
-- `workspace` → the active Hermes home's `workspace/` directory.
-- `workspaces` → the active Hermes home's `workspaces/` directory.
-
-For example, a report saved in `$HERMES_HOME/workspace/launch/report.pdf` can use:
+1. Resolve the intended profile's Hermes home.
+2. Create or edit `plugin-data/delivery-shelf/allowed-roots.json` beneath that home.
+3. Map aliases to absolute backend directories, using this fictional shape:
 
 ```json
 {
-  "title": "Spring launch report",
-  "kind": "report",
-  "project": "Website",
-  "tags": ["launch", "final"],
-  "file": {"root": "workspace", "path": "launch/report.pdf"}
+  "deliveries": "/srv/example-project/deliveries"
 }
 ```
 
-The file must already exist. A card without an attachment can omit `file` entirely.
-The plugin does not recursively list or discover files in an approved directory.
+4. Reload the collection's status and check the reported alias.
+5. Save and download a fictional allowed file before using real deliverables.
 
-### Approve another root
+An explicit policy replaces `workspace` and `workspaces` defaults. `{}` disables source roots. A malformed policy denies access. Do not approve the whole home, a credentials directory, or the filesystem root. Source policy does not scan file contents for secrets.
 
-An operator can create this file under the **intended profile's** Hermes home:
+Files must be ordinary, safely opened files with allowed extensions, at most 10 MiB each. See [file policy](TECHNICAL.md#file-policy). A native Windows client with a supported remote backend is not proof of Windows-backend preservation support.
 
-```text
-plugin-data/delivery-shelf/allowed-roots.json
-```
+## Configure Telegram ownership
 
-Its contents map aliases to absolute paths on the backend machine:
+Use [Telegram setup](TELEGRAM.md) for the separate profile-local owner policy. Permission to receive Telegram traffic is not permission to manage Shelf. Shelf and Bookmarks use different owner-policy files.
 
-```json
-{
-  "deliveries": "/srv/my-project/deliveries"
-}
-```
+Native attachments, numbered lists, and buttons need the host's Telegram lifecycle and transport. Check owner, chat/topic, session, and exact result before retrying an uncertain save or send. Never weaken isolation to make buttons appear.
 
-This example path is illustrative: replace it with your real, narrowly scoped delivery
-directory. An explicit policy replaces the defaults. Use `{}` to allow metadata-only
-operation with no file roots. Keep this operator-owned file private; it cannot be
-edited through the plugin's browser API. A malformed policy fails closed.
+## Manage version approval
 
-Avoid approving a home directory, a credentials directory, or the filesystem root.
-The plugin rejects the filesystem root outright. File-name exclusions are an extra
-safeguard, not a secret-detection service: operators remain responsible for the contents
-of approved roots.
+First saves stay deliberate. For an exact offered version of a known saved delivery, **Yes** approves one version. **Always for this delivery** approves that version and later concrete versions of that entry for the approving owner. **Keep current** changes nothing.
 
-### File limits
+To revoke standing consent:
 
-Supported attachment extensions: `.txt`, `.md`, `.csv`, `.pdf`, `.png`, `.jpg`,
-`.jpeg`, `.webp`, `.gif`, and `.zip`. ZIP is an opaque download: never unpacked,
-rendered, or executed. No other archive extensions are accepted. Only text, Markdown, and CSV have inline plain-text
-previews. Binary files are downloads, not active embedded documents. HTML, SVG,
-executables, databases, dotfiles, unsafe path segments, and obvious sensitive filenames
-are not downloadable.
+1. Open delivery details or Library's inspector.
+2. Check **New versions** and its paused state.
+3. Select **Ask before next version**.
+4. Confirm the status returns to **Ask first**.
 
-The maximum download is **10 MiB**. Text preview reads at most **64 KiB** and marks
-longer content as truncated. Symlinks—including symlink ancestors of the approved
-root—and hard-linked files are rejected. Safe file delivery requires POSIX descriptor
-operations; where those primitives are unavailable, the metadata catalog remains
-usable but file access refuses rather than weakening the check.
+There is no settings switch that grants Always. Updates pause outside Active, but restoring an entry can resume an existing grant. Revoke first if you want another question after restoration.
 
-Files are read from their current location on each request. Changing a file's contents
-changes what a later download retrieves; registering a file does not freeze or copy it.
+## Archive or clean up deliveries
 
-## Edit or remove an entry
+Use delivery checkboxes for cleanup. The native toolbar distinguishes **This page** from **All matching deliveries**. File rows belonging to the same delivery do not become separate cleanup targets.
 
-Use the shelf's edit controls to change metadata. Enter one tag per line; commas inside
-a tag remain part of that tag. Saving carries the revision you
-loaded. If another client changed the entry, refresh before editing again; the plugin
-will not silently replace their newer version.
+- Archive retains deliveries indefinitely. Restore to Active when needed.
+- Trash is recoverable for 30 or 60 days, with 60 as the default.
+- Empty Trash affects all Trash, not only a filtered or checked subset. It starts a 60-minute Pending deletion window.
 
-Removal deletes only the catalog entry. It does not remove the attached file, its
-folder, or any source conversation. You can edit or remove a card whose attachment
-has become unavailable.
+Restore before the recorded deadline. Disabling **Automatic due-item cleanup** does not extend recovery and does not stop purge jobs already queued. **Clean up due items now** explicitly processes due items even with automatic scheduling off.
 
-## Storage and retention
+Changing **Trash retention** applies to existing Trash from its original trash timestamp. Reducing retention can make entries immediately due. Cleanup removes managed Shelf copies and their catalog records, never original working files.
 
-The catalog is stored on the backend under:
+## Back up or erase plugin data
 
-```text
-$HERMES_HOME/plugin-data/delivery-shelf/shelf.sqlite3
-```
+For a restorable file collection, back up the whole `plugin-data/delivery-shelf/` directory beneath the bound Hermes home. The SQLite catalog alone does not contain managed file bytes or all scoped permission state.
 
-The default profile commonly uses `~/.hermes`; named profiles have their own homes.
-The request's host-bound profile selects the catalog. Supplying another profile name
-in a URL is not permission to read it.
+1. Stop writers and cleanup for a coordinated snapshot, or use a backup procedure that coordinates SQLite and the managed-file tree.
+2. Copy the whole plugin data directory to protected backup storage.
+3. Test recovery in a disposable profile before trusting the backup.
 
-No automatic expiration is applied. Normal plugin updates or removal leave the catalog
-in place. Exporting, copying, or backing up this database can expose titles, notes,
-tags, and registered file references; treat it as private data.
+Do not copy only a live main SQLite file and assume consistency. Treat original paths, source references, descriptions, policies, and saved file bytes as private data.
 
-For a consistent backup, stop clients that can change the catalog or use SQLite's
-backup API. Do not assume copying a live SQLite main file alone captures all activity.
-To erase the catalog, first remove entries through the UI or stop/disable the plugin,
-then deliberately remove its **own** data directory. Never remove a broader
-`plugin-data/` directory, native `state.db`, or source files as a shortcut.
+Package update or removal does not erase plugin data. For deliberate erasure, stop or disable clients and remove only this plugin's own data directory. Never remove native `state.db`, the broader `plugin-data/` tree, or original working directories as a shortcut.
 
-## Update, disable, or remove
+## Update or disable the package
 
 ```sh
 hermes plugins update delivery-shelf
 hermes plugins disable delivery-shelf
 hermes plugins remove delivery-shelf
+hermes plugins list
 ```
 
-Verify the desired state in `hermes plugins list` and Desktop's plugin controls.
-Restart a running backend after Python changes. Rescan Desktop after package updates;
-an already-copied frontend can otherwise remain stale. Removal is not data erasure.
+Run commands in the intended profile. Check both Agent and Desktop state where relevant. Activate changed backend and frontend code through their normal host lifecycle. Obtain a restart decision before interrupting active work. A successful build or Rescan is not proof that both installed halves changed.
 
-## Troubleshooting
+## Diagnose a failed operation
 
-### The page is missing
+| Symptom | Action |
+| --- | --- |
+| UI absent or API 404 | Check backend, profile, package enablement, and native Desktop pairing. |
+| Profile mismatch | Reconnect to the intended profile. Do not change a URL to select another home. |
+| No recent file | Use manual Add or an explicit known file. Do not guess a replacement path. |
+| Automatic Add refused | Use manual Add and explicit Save. Leave isolation unchanged. |
+| Generation unavailable | Enter metadata manually and check supported Agent runtime/model registration. |
+| Already saved | Inspect the existing delivery. Approve Add version for a new edition. |
+| Revision conflict | Refresh the exact delivery and review its latest state before retry. |
+| Managed-file integrity failure | Preserve the error and inspect storage or a known-good backup. Do not substitute original bytes. |
+| Legacy source unavailable | Recover the original or deliberately save a new version from a known source. |
+| Send unconfirmed | Inspect the destination chat before another send. |
+| Purge still queued | Keep the error and inspect backend storage access; turning scheduling off does not cancel the queue. |
 
-Check that the package is installed on the correct machine, both relevant plugin
-halves are enabled, and the Dashboard backend has restarted since installation.
-Rescan Desktop plugins. A server installation and a local Desktop installation are
-not interchangeable.
-
-### The page loads, but API requests return 404
-
-The frontend may be present while the backend is absent or disabled. Verify the
-connected host, active profile, installed plugin ID, and backend enablement. Do not
-work around this by exposing a standalone unauthenticated API.
-
-### A profile mismatch is reported
-
-Reconnect or reload against the intended profile. The plugin refuses an unbound or
-mismatching profile hint rather than silently returning the backend's launch profile.
-
-### An attachment is unavailable
-
-Check the current approved root, relative path, extension, file size, and whether any
-path segment is a symlink. A moved file does not follow its shelf entry automatically.
-Update its reference, or keep the entry as metadata only.
-
-### Saving reports that the delivery changed elsewhere
-
-Another client saved a newer revision. Refresh, review the current values, and apply
-your change again. This is an intentional lost-update safeguard.
-
-### I uninstalled it, but my entries returned after reinstalling
-
-Plugin data is retained separately from package code. This protects your collection
-during updates and removal. See [storage and retention](#storage-and-retention) for
-explicit erasure.
-
-If none of these resolves the issue, [open a bug report](https://github.com/mechkw/hermes-delivery-shelf/issues/new/choose)
-with versions and a fictional reproduction. Keep private file paths and contents out
-of public reports.
+Use fictional data in public reports. Send security reports through [SECURITY.md](../SECURITY.md), with **repobugs@virtuedev.com** as the private fallback.

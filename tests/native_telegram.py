@@ -41,7 +41,7 @@ class Runner(GatewayInboundHooksMixin):
 def prepare(home, isolation='in_process'):
     target = home/'plugins/delivery-shelf'
     target.mkdir(parents=True)
-    for name in ('__init__.py','telegram_shelf.py','recent_artifacts.py','plugin.yaml'):
+    for name in ('__init__.py','telegram_shelf.py','recent_artifacts.py','agent_awareness.py','agent_quick_add.py','agent_versions.py','plugin.yaml'):
         shutil.copy2(ROOT/name, target/name)
     shutil.copytree(ROOT/'dashboard',target/'dashboard')
     (home/'workspaces').mkdir()
