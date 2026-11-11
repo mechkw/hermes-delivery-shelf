@@ -15,12 +15,6 @@ Save the files Hermes delivers, keep related files together, and return to the v
   <img src="docs/assets/mark-on-light.png" alt="Delivery Shelf logo: retained documents on a shelf" width="104" height="104">
 </picture>
 
-## Watch it work
-
-[Delivery Shelf launch film · 36 seconds](docs/assets/launch.mp4) · [Both plugins together · 42 seconds](docs/assets/saved-together.mp4)
-
-Real dark-mode native screens, fictional Northstar work. The films cut between captured states rather than simulate a continuous recording.
-
 ## Keep the handoff, not the whole folder
 
 A report and its charts belong together. So do a presentation and its supporting spreadsheet. Save that handoff as one **delivery**, with a useful title, description, tags, and project.
