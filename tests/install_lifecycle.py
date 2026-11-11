@@ -33,8 +33,8 @@ def main():
                    GIT_CONFIG_GLOBAL=os.devnull)
         fixture = base/'fixture'
         fixture.mkdir()
-        for name in ('plugin.yaml', '__init__.py', 'telegram_shelf.py', 'recent_artifacts.py', 'VERSION'):
-            shutil.copy2(ROOT/name, fixture/name)
+        for source_file in (ROOT/'plugin.yaml', ROOT/'VERSION', *ROOT.glob('*.py')):
+            shutil.copy2(source_file, fixture/source_file.name)
         for name in ('dashboard', 'desktop'):
             shutil.copytree(ROOT/name, fixture/name, ignore=shutil.ignore_patterns('__pycache__'))
         def run(args, cwd=fixture):
@@ -51,9 +51,19 @@ def main():
             except subprocess.CalledProcessError as exc:
                 print(exc.stdout)
                 raise
-        native('from hermes_cli.plugins_cmd_install import cmd_install; '
-               f'cmd_install({fixture.as_uri()!r}, enable=False, no_deps=True)')
         target = bank/'plugins/delivery-shelf'
+        # A custom Git source with known caution findings needs explicit consent.
+        # Prove default refusal before accepting the reviewed fictional fixture.
+        try:
+            native('from hermes_cli.plugins_cmd_install import cmd_install; '
+                   f'cmd_install({fixture.as_uri()!r}, enable=False, no_deps=True)')
+        except subprocess.CalledProcessError as exc:
+            assert 'caution' in exc.stdout and 'BLOCKED' in exc.stdout, exc.stdout
+        else:
+            raise AssertionError('Unconfirmed caution install must be refused')
+        assert not target.exists()
+        native('from hermes_cli.plugins_cmd_install import cmd_install; '
+               f'cmd_install({fixture.as_uri()!r}, force=True, enable=False, no_deps=True)')
         for name in ('__init__.py', 'telegram_shelf.py', 'recent_artifacts.py', 'dashboard/plugin_api.py', 'dashboard/dist/index.js', 'desktop/plugin.js'):
             assert (target/name).read_bytes() == (fixture/name).read_bytes(), name
         # Exercise the actual Electron filesystem implementation without Electron/IPC.
@@ -93,8 +103,23 @@ def main():
         with (fixture/'desktop/plugin.js').open('a') as stream:
             stream.write('\n// Fictional lifecycle revision two.\n')
         git('add', '.'); git('commit', '-qm', 'fictional update fixture')
+        def installed_bytes():
+            return {p.relative_to(target).as_posix(): p.read_bytes()
+                    for p in target.rglob('*')
+                    if p.is_file() and '.git' not in p.relative_to(target).parts}
+        installed_before = installed_bytes()
+        native('from hermes_cli.plugins_transaction import update_plugin; '
+               'from hermes_cli.plugins_cmd import PluginScanBlocked; from pathlib import Path;\n'
+               'try:\n'
+               f' update_plugin(Path({str(target)!r}))\n'
+               'except PluginScanBlocked as exc:\n'
+               ' assert "caution" in str(exc).lower(), str(exc)\n'
+               'else:\n'
+               ' raise AssertionError("Unconfirmed caution update must be refused")')
+        assert installed_bytes() == installed_before
+        assert databases[0].read_bytes() == before
         native('from hermes_cli.plugins_transaction import update_plugin; from pathlib import Path; '
-               f'print(update_plugin(Path({str(target)!r})))')
+               f'print(update_plugin(Path({str(target)!r}), force=True))')
         reconcile()
         assert (desktop/'plugin.js').read_bytes() == (fixture/'desktop/plugin.js').read_bytes()
         assert databases[0].read_bytes() == before

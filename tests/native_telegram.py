@@ -17,6 +17,7 @@ from telegram import Update
 from telegram.ext import Application
 from hermes_constants import set_hermes_home_override, reset_hermes_home_override
 from hermes_cli.plugins import PluginManager
+from hermes_state import SessionDB
 from hermes_cli.plugin_command_dispatch import invoke_plugin_command
 from gateway.run_inbound_hooks import GatewayInboundHooksMixin
 from gateway.session import SessionSource
@@ -58,7 +59,7 @@ async def main():
         prepare(home)
         token = set_hermes_home_override(home)
         manager = PluginManager(str(home))
-        app = None
+        app = db = None
         try:
             await asyncio.to_thread(manager.discover_and_load)
             info = [p for p in manager.list_plugins() if p['name']=='delivery-shelf']
@@ -97,6 +98,7 @@ async def main():
             search = registry.get_entry('delivery_shelf_search',scope=manager.scope_key).handler
             register = registry.get_entry('delivery_shelf_register',scope=manager.scope_key).handler
             offer = registry.get_entry('delivery_shelf_offer_update',scope=manager.scope_key).handler
+            respond = registry.get_entry('delivery_shelf_respond_update',scope=manager.scope_key).handler
             assert json.loads(search({}))['data']['total']==0
             request = json.loads(queued[0]['content'].split('\n',1)[1])['supplied']['request_id']
             with runner._session_env_scope(entry):
@@ -106,15 +108,43 @@ async def main():
                 assert saved['ok'], saved
                 readback = json.loads(search({}))['data']['items'][0]
                 assert readback==saved['data']
+                unavailable = json.loads(await asyncio.to_thread(offer, {'id':readback['id'],
+                    'file':{'root':'workspaces','path':'second.md'}}))
+                assert unavailable['ok'] is False and json.loads(search({}))['data']['items']==[readback]
+                # A concrete version needs a completed delivery in this exact session.
+                (home/'workspaces/second.md').write_text('Fictional newly delivered native revision')
+                db = SessionDB(home/'state.db')
+                db.create_session('native-session', source='telegram', user_id='17')
+                delivered = db.append_message('native-session', 'assistant',
+                    'MEDIA:'+str(home/'workspaces/second.md'))
                 offered = json.loads(await asyncio.to_thread(offer, {'id':readback['id'],
                     'file':{'root':'workspaces','path':'second.md'}}))
-                assert offered=={'ok':True,'status':'offered','saved':False}, offered
+                assert offered['ok'] and offered['status']=='offered' and offered['saved'] is False, offered
+                assert offered['id']==readback['id'] and offered['file']['path']=='second.md'
+                assert json.loads(search({}))['data']['items']==[readback]
+            # Stage a native confirmation before conversational approval. The
+            # successful version must fence this separate revision-1 callback.
+            assert await runner._hm_run_plugin_handler(handler, None, source, session_entry=entry, args='') is None
             nonce = next(reversed(controller.panels))
             panel = controller.panels[nonce]
-            await app.process_update(update(f'shelf:{nonce}:0'))
+            async def click_label(label):
+                markup = capture.calls[-1][1]['reply_markup']['inline_keyboard']
+                data = next(b['callback_data'] for row in markup for b in row if b['text']==label)
+                await app.process_update(update(data))
+                return data
+            await click_label('Native result')
+            await click_label('Add version')
+            with runner._session_env_scope(entry):
+                approved = json.loads(await asyncio.to_thread(respond,
+                    {'offer_id':offered['offer_id'], 'decision':'yes'}))
+                assert approved['ok'] and approved['saved'], approved
+            await click_label('Confirm new version')
+            assert 'Could not complete confirmation' in capture.calls[-1][1]['text']
             final = json.loads(search({}))['data']['items'][0]
             assert final['id']==readback['id'] and final['file']['path']=='second.md' and final['revision']==2
             assert final['tags']==['Keep-Case'] and final['description']=='Fictional description'
+            assert final==approved['data'] and final['versions'][0]==readback['versions'][0]
+            assert final['versions'][-1]['files'][0]['provenance']['message_id']==delivered
             result = await runner._hm_run_plugin_handler(handler, None, source, session_entry=entry,
                 args='add NativeCase #Keep-Tag --file workspaces:first.md')
             assert result is None and len(queued) == 2
@@ -133,12 +163,13 @@ async def main():
             assert not controller.panels and not controller.requests
             manager.clear_gateway_message_injector(owner)
             print('PASS official loader → real gateway sync/awaitable dispatcher → PTB Application/InlineKeyboardMarkup capture')
-            print('PASS native consent injection queued; register + search exact readback; offered ≠ saved; callback CAS same-ID update; native reset hook')
+            print('PASS native consent injection queued; exact readback; offered ≠ saved; approved same-ID version with provenance; stale callback CAS; native reset hook')
             assert manager.unload('delivery-shelf')
             assert not controller.alive
         finally:
             manager.unload()
             if app: await app.shutdown()
+            if db: db.close()
             reset_hermes_home_override(token)
 
         # Real out-of-process host, never an isolation mock. Native transport stays absent.
@@ -157,7 +188,8 @@ async def main():
             assert 'Inline panels unavailable' not in result and '--file' not in result
             for args in ('dl 1', 'download 1', 'r3'):
                 fallback = await asyncio.to_thread(invoke_plugin_command, handler, args, platform='telegram')
-                assert isinstance(fallback, str) and 'unavailable here' in fallback, fallback
+                assert isinstance(fallback, str) and 'not bound on this gateway' in fallback, fallback
+                assert 'Nothing saved or sent' in fallback and 'keep isolation unchanged' in fallback
             print('PASS real isolated plugin host: loads text command, no native factories, honest inline fallback')
         finally:
             manager.unload()

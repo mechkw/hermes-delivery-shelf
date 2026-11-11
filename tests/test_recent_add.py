@@ -21,9 +21,23 @@ class RecentAddTests(transport.TelegramTests):
         self.identity = self.controller.identity(self.source, 'fictional-session', 'telegram:-100:9', 'telegram')
         self.db = SessionDB(self.home/'state.db')
         self.db.create_session('fictional-session', source='telegram')
+        request = self.db.append_message('fictional-session', 'assistant', 'Prepare the fictional report.')
+        with closing(sqlite3.connect(self.home/'state.db')) as conn, conn:
+            conn.execute("UPDATE messages SET role='user' WHERE id=?", (request,))
         self.ctx.accept = False
+        self.disposals = []
+        async def complete(**kwargs):
+            header = next(json.loads(block['text']) for block in kwargs['input']
+                          if block.get('type') == 'text' and block.get('text', '').startswith('{"file_name"'))
+            values = {'title': header['file_name'], 'description': 'Fictional file details', 'tags': ['Fixture']}
+            return SimpleNamespace(parsed={key: values[key] for key in kwargs['json_schema']['required']})
+        model = SimpleNamespace(acomplete_structured=complete)
+        setattr(self.ctx, 'llm', model)
+        plugin._service().bind_generation(SimpleNamespace(llm=model, on_unload=self.disposals.append))
 
     async def asyncTearDown(self):
+        for dispose in self.disposals:
+            dispose()
         self.db.close()
         await super().asyncTearDown()
 
@@ -35,6 +49,10 @@ class RecentAddTests(transport.TelegramTests):
         result = self.ctx.commands['shelf'](args, source=self.source, session_id='fictional-session',
             session_key='telegram:-100:9', platform='telegram')
         return await result if hasattr(result, '__await__') else result
+
+    async def manual(self, raw=''):
+        # The panel's explicit Add action remains a chooser. Typed add is quick capture.
+        return await self.controller._add_recent_panel(self.identity, raw, self.controller.epoch)
 
     def callback_update(self, data, *, user=17, thread=9, message=None):
         from telegram import Update
@@ -50,9 +68,9 @@ class RecentAddTests(transport.TelegramTests):
     async def test_newest_set_chooser_selects_exact_file_and_rejects_foreign_callbacks(self):
         self.deliver('old.md')
         self.deliver('new.md', 'third.md')
-        await self.command('add Chosen title #Keep-Case --description "Supplied description"')
+        await self.manual('Chosen title #Keep-Case --description "Supplied description"')
         buttons = self.buttons()
-        self.assertEqual([b['text'] for b in buttons], ['new.md','third.md','Cancel'])
+        self.assertEqual([b['text'] for b in buttons], ['new.md','third.md','Save all 2 files','Cancel'])
         self.assertEqual(self.store.search()['total'], 1)  # only pre-existing fixture
         selected = buttons[1]['callback_data']
         message = self.capture.serial
@@ -72,7 +90,7 @@ class RecentAddTests(transport.TelegramTests):
 
     async def test_rejected_replacement_and_error_edit_never_retarget_old_choice(self):
         self.deliver('old.md', 'new.md')
-        await self.command()
+        await self.manual()
         old_choice = self.buttons()[1]['callback_data']
         message = self.capture.serial
         await self.app.process_update(self.callback_update(old_choice, message=message))
@@ -93,7 +111,7 @@ class RecentAddTests(transport.TelegramTests):
             self.assertTrue(self.capture.calls[-1][1].get('show_alert'), stale)
             self.assertEqual(self.store.search(), before)
         # A new command is a clean retry, not a resurrection of the rejected panel.
-        await self.command()
+        await self.manual()
         retry = self.buttons()[1]['callback_data']
         self.assertNotIn(retry, (old_choice, unpublished))
         self.assertLessEqual(len(retry.encode()), 64)
@@ -108,7 +126,7 @@ class RecentAddTests(transport.TelegramTests):
         for outcome in ('cancel', 'timeout', 'true', 'wrong-message', 'wrong-chat', 'wrong-topic'):
             with self.subTest(outcome=outcome):
                 self.deliver('old.md', 'new.md')
-                await self.command()
+                await self.manual()
                 old_choice = self.buttons()[1]['callback_data']
                 message = self.capture.serial
                 await self.app.process_update(self.callback_update(old_choice, message=message))
@@ -165,18 +183,18 @@ class RecentAddTests(transport.TelegramTests):
                     self.assertTrue(self.capture.calls[-1][1].get('show_alert'))
                     self.assertEqual(self.store.search(), before)
                 # Retry presents current choices; a genuine Cancel remains harmless.
-                await self.command()
+                await self.manual()
                 retry_buttons, retry_message = self.buttons(), self.capture.serial
                 await self.app.process_update(self.callback_update(retry_buttons[-1]['callback_data'], message=retry_message))
                 self.assertIn('Cancelled', self.capture.calls[-1][1]['text'])
                 self.assertEqual(self.store.search(), before)
-        await self.command()
+        await self.manual()
         await self.app.process_update(self.callback_update(self.buttons()[1]['callback_data'], message=self.capture.serial))
         self.assertEqual(self.store.search(q='third.md')['total'], 1)
 
     async def test_successful_replacements_never_reuse_old_choice_tokens(self):
         self.deliver('old.md', 'new.md')
-        await self.command()
+        await self.manual()
         message = self.capture.serial
         old_choices = [b['callback_data'] for b in self.buttons()]
         await self.app.process_update(self.callback_update(old_choices[1], message=message))
@@ -199,14 +217,14 @@ class RecentAddTests(transport.TelegramTests):
 
     async def test_duplicate_keeps_existing_metadata_revision_and_exposes_view(self):
         self.deliver('old.md')
-        await self.command('add Replacement #Not-used --description "Not used"')
+        await self.manual('Replacement #Not-used --description "Not used"')
         self.assertEqual(self.store.get(self.entry['id']), self.entry)
         self.assertEqual(self.store.search()['total'], 1)
         self.assertIn('Already saved', self.capture.calls[-1][1]['text'])
         self.assertEqual(self.buttons()[0]['text'], 'View saved file')
 
     async def test_missing_never_offers_unsupported_reply_or_injection(self):
-        result = await self.command()
+        result = await self.manual()
         self.assertEqual(result, 'No recent file found. Ask me to save the file in normal chat.')
         self.assertEqual(self.ctx.queued, [])
 
@@ -215,7 +233,7 @@ class RecentAddTests(transport.TelegramTests):
         for change in ('source', 'reset', 'expired', 'policy'):
             with self.subTest(change=change):
                 row = self.deliver('new.md', 'third.md')
-                await self.command()
+                await self.manual()
                 button = self.buttons()[0]['callback_data']
                 message = self.capture.serial
                 panel = next(reversed(self.controller.panels.values()))
@@ -241,7 +259,7 @@ class RecentAddTests(transport.TelegramTests):
         self.db.append_message('fictional-session', 'user', 'MEDIA:'+path)
         self.db.append_message('fictional-session', 'assistant', 'Here is a possible path: '+path)
         self.db.append_message('fictional-session', 'assistant', '```text\nMEDIA:'+path+'\n```')
-        result = await self.command()
+        result = await self.manual()
         self.assertIn('No recent file found', result)
         self.assertEqual(self.store.search()['total'], 1)
 
@@ -259,7 +277,7 @@ class RecentAddTests(transport.TelegramTests):
                     conn.execute('UPDATE messages SET display_order=NULL,display_identity=NULL')
             with closing(sqlite3.connect(self.home/'state.db')) as conn, conn:
                 before = list(conn.iterdump())
-            await self.command()
+            await self.manual()
             with closing(sqlite3.connect(self.home/'state.db')) as conn, conn:
                 self.assertEqual(list(conn.iterdump()), before)
             self.assertEqual(self.store.search()['total'], 2)
@@ -270,7 +288,7 @@ class RecentAddTests(transport.TelegramTests):
         for name in ('not-there.md', 'unsupported.exe', '.env', 'secret.md'):
             with self.subTest(name=name):
                 self.deliver(name)
-                result = await self.command()
+                result = await self.manual()
                 self.assertTrue(result)
                 self.assertNotIn('Already saved', result)
                 self.assertEqual(self.store.search()['total'], 1)
@@ -312,7 +330,7 @@ class RecentAddTests(transport.TelegramTests):
                 finished.set()
         try:
             with patch.object(Store, 'connect', traced), patch.object(self.controller, '_prepare_recent', observed):
-                task = asyncio.create_task(self.command())
+                task = asyncio.create_task(self.manual())
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
@@ -352,7 +370,7 @@ class RecentAddTests(transport.TelegramTests):
             with patch.object(api.Store, 'connect', traced), patch.object(source, 'connection', traced_source), \
                     patch.object(source, 'candidates', wraps=source.candidates) as candidates, \
                     patch.object(api, 'bound_home', side_effect=lambda: current_home[0]):
-                task = asyncio.create_task(self.command())
+                task = asyncio.create_task(self.manual())
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
                 self.assertFalse(task.done())
                 before, candidate_calls = list(reads), candidates.call_count
@@ -389,7 +407,7 @@ class RecentAddTests(transport.TelegramTests):
             return result
         with patch.object(source, 'candidates', delayed), \
                 patch.object(api, 'bound_home', side_effect=lambda: current_home[0]):
-            task = asyncio.create_task(self.command())
+            task = asyncio.create_task(self.manual())
             try:
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
                 current_home[0] = self.home/'foreign-profile'
@@ -407,16 +425,17 @@ class RecentAddTests(transport.TelegramTests):
             target.parent.mkdir()
             target.write_text('Fictional file')
         self.deliver('one/result.md', 'two/result.md')
-        await self.command()
-        self.assertEqual([b['text'] for b in self.buttons()], ['one/result.md', 'two/result.md', 'Cancel'])
+        await self.manual()
+        self.assertEqual([b['text'] for b in self.buttons()], ['one/result.md', 'two/result.md', 'Save all 2 files', 'Cancel'])
 
     async def test_concurrent_commands_are_idempotent_without_metadata_overwrite(self):
         self.deliver('new.md')
-        await asyncio.gather(self.command(), self.command())
+        raw = 'add new.md #Fixture --description "Fictional file details"'
+        results = await asyncio.gather(self.command(raw), self.command(raw))
         self.assertEqual(self.store.search()['total'], 2)
         saved = self.store.search(q='new.md')['items'][0]
         self.assertEqual(saved['revision'], 1)
-        self.assertEqual(sum('Already saved' in call[1].get('text','') for call in self.capture.calls), 1)
+        self.assertEqual(sum('Already saved' in (result or '') for result in results), 1)
 
     async def test_missing_source_identity_never_falls_back_to_injection(self):
         result = self.ctx.commands['shelf']('add', platform='telegram', session_id='fictional-session',
@@ -427,7 +446,7 @@ class RecentAddTests(transport.TelegramTests):
 
     async def test_chooser_never_hydrates_or_selects_future_deliveries(self):
         self.deliver('new.md', 'third.md')
-        await self.command()
+        await self.manual()
         choice = self.buttons()[0]['callback_data']
         message = self.capture.serial
         self.db.append_message('fictional-session', 'assistant', 'x'*70000+'\nMEDIA:/not/future.md')
@@ -439,11 +458,11 @@ class RecentAddTests(transport.TelegramTests):
         self.deliver('new.md')
         for i in range(40):
             self.db.append_message('fictional-session', 'assistant', 'Ordinary response '+str(i))
-        self.assertIn('No recent file found', await self.command())
+        self.assertIn('No recent file found', await self.manual())
         self.deliver('new.md')
         with closing(sqlite3.connect(self.home/'state.db')) as conn, conn:
             conn.execute("UPDATE sessions SET profile_name='foreign' WHERE id='fictional-session'")
-        self.assertIn('unavailable', await self.command())
+        self.assertIn('unavailable', await self.manual())
         self.assertEqual(self.store.search()['total'], 1)
 
     async def test_added_file_view_sends_exact_bytes_without_model_or_injection(self):
@@ -451,9 +470,12 @@ class RecentAddTests(transport.TelegramTests):
         payload = b'Integrated Add then download: exact bytes'
         (self.home/'workspaces/new.md').write_bytes(payload)
         self.deliver('new.md')
-        reject = Mock(side_effect=AssertionError('No model or handoff'))
+        reject = Mock(side_effect=AssertionError('No agent handoff'))
+        model_calls = Mock(side_effect=AssertionError('No model calls for supplied metadata or download'))
+        bound_model = SimpleNamespace(acomplete_structured=model_calls)
+        plugin._service().bind_generation(SimpleNamespace(llm=bound_model, on_unload=self.disposals.append))
         with patch.object(self.ctx, 'inject_message', reject), patch.object(self.ctx, 'llm', reject, create=True):
-            self.assertIsNone(await self.command())
+            self.assertIsNone(await self.manual('new.md #Exact --description "Exact bytes"'))
             message = self.capture.serial
             view = self.buttons()[0]['callback_data']
             await self.app.process_update(self.callback_update(view, message=message))
@@ -461,6 +483,7 @@ class RecentAddTests(transport.TelegramTests):
             await self.app.process_update(self.callback_update(send, message=message))
             await self.app.process_update(self.callback_update(send, message=message))
             reject.assert_not_called()
+            model_calls.assert_not_called()
         self.assertEqual(len(self.capture.uploads), 1)
         verb, data, files = self.capture.uploads[0]
         self.assertEqual((verb, data['chat_id'], data['message_thread_id']), ('sendDocument', -100, 9))
@@ -470,7 +493,7 @@ class RecentAddTests(transport.TelegramTests):
 
     async def test_single_group_add_without_injection_registers_and_reads_back(self):
         self.deliver('new.md')
-        result = await self.command()
+        result = await self.command('add new.md #Fixture --description "Fictional file details"')
         saved = self.store.search(q='new.md')['items']
         self.assertEqual(len(saved), 1, result)
         self.assertEqual(saved[0]['file'], {'root':'workspaces','path':'new.md'})

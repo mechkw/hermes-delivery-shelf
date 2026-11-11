@@ -24,9 +24,9 @@ with tempfile.TemporaryDirectory(prefix='sv-', dir=sys.argv[2]) as directory:
     for name in installed:
         target = home / 'plugins' / name
         target.mkdir(parents=True)
-        for file in ('__init__.py', 'plugin.yaml', 'telegram_shelf.py', 'recent_artifacts.py'):
-            if (repos[name] / file).is_file():
-                shutil.copy2(repos[name] / file, target / file)
+        for source_file in (repos[name] / 'plugin.yaml', *repos[name].glob('*.py')):
+            if source_file.is_file():
+                shutil.copy2(source_file, target / source_file.name)
         for folder in ('dashboard', 'desktop'):
             shutil.copytree(repos[name] / folder, target / folder, ignore=shutil.ignore_patterns('__pycache__'))
     (home / 'config.yaml').write_text('plugins:\n  isolation: in_process\n  enabled: '+json.dumps(enabled)+'\n  disabled: '+json.dumps(disabled)+'\n')

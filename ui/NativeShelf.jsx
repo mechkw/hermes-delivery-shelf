@@ -62,6 +62,7 @@ const withPendingTag=d=>d.pendingTag?.length?{...d,pendingTag:'',metadata:editFi
  * Radix portal never destroys form drafts, selected files, or generation state. */
 export function NativeShelf({api,ownerKey,sessionId='',open=true,onClose,retained,modal=true,initialView='library'}){
  const fallbackStash=useRef(new Map());const stash=retained||fallbackStash.current;
+ const addTrigger=useRef(null);
  const [draft,setDraft]=useState(()=>{const held=stash.get(ownerKey);return held?{...held,metadata:invalidateGeneration(held.metadata)}:newShelfDraft(ownerKey,sessionId);});
 
  const draftRef=useRef(draft);draftRef.current=draft;
@@ -108,9 +109,9 @@ export function NativeShelf({api,ownerKey,sessionId='',open=true,onClose,retaine
     <Button disabled={busy} onClick={()=>setVersioning(v=>!v)}>{versioning?'Cancel update':'Add version'}</Button>
     {versioning&&<section aria-label="Update delivery"><FileChooser api={api} draft={draft} change={change} disabled={busy} enabled={open}/><DialogFooter><Button variant="default" disabled={busy} onClick={()=>action(async()=>{const entry=await updateVersion(api,selected,draftRef.current.selections,draftRef.current.session_id);if(alive.current){setSelected(entry);setVersioning(false);setRefresh(n=>n+1);}})}>Save new version</Button></DialogFooter></section>}
    </>}
-  </section>:settings?<NativeLibrary api={api} settings={settings} catalog={{...catalog,add:()=>{setTab('add');setError('');}}} busy={busy} open={openEntry} download={record=>action(async()=>downloadFile(await api(savedFileUrl(record))))} pages={<Pages choices={catalog} noun="deliveries"/>} status={<ChoicesStatus choices={catalog} noun="deliveries"/>}/>:<Loader label="Loading Shelf preferences"/>}</div>
+  </section>:settings?<NativeLibrary api={api} settings={settings} catalog={{...catalog,addRef:addTrigger,add:()=>{setTab('add');setError('');}}} busy={busy} open={openEntry} download={record=>action(async()=>downloadFile(await api(savedFileUrl(record))))} pages={<Pages choices={catalog} noun="deliveries"/>} status={<ChoicesStatus choices={catalog} noun="deliveries"/>}/>:<Loader label="Loading Shelf preferences"/>}</div>
  </div>;
  if(!modal&&tab!=='add')return content;
- if(!modal)return <NativeDialog open={open} onOpenChange={value=>{if(!value)setTab('library');}}><DialogContent className="ds-native-dialog" bodyClassName="ds-native-dialog-body" aria-describedby={undefined}><DialogHeader><DialogTitle>Add delivery</DialogTitle></DialogHeader>{content}</DialogContent></NativeDialog>;
+ if(!modal)return <NativeDialog open={open} onOpenChange={value=>{if(!value)setTab('library');}}><DialogContent className="ds-native-dialog" bodyClassName="ds-native-dialog-body" aria-describedby={undefined} onCloseAutoFocus={event=>{if(addTrigger.current?.isConnected){event.preventDefault();addTrigger.current.focus();}}}><DialogHeader><DialogTitle>Add delivery</DialogTitle></DialogHeader>{content}</DialogContent></NativeDialog>;
  return <NativeDialog open={open} onOpenChange={value=>{if(!value)dismiss();}}><DialogContent className="ds-native-dialog" bodyClassName="ds-native-dialog-body" aria-describedby={undefined}><DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>{content}</DialogContent></NativeDialog>;
 }

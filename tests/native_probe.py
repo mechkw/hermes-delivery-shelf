@@ -14,8 +14,8 @@ def prepare(home):
     home.mkdir(parents=True, exist_ok=True)
     package=home/'plugins/delivery-shelf'
     package.mkdir(parents=True)
-    for filename in ('plugin.yaml','__init__.py','telegram_shelf.py','recent_artifacts.py'):
-        shutil.copy2(ROOT/filename,package/filename)
+    for source in (ROOT/'plugin.yaml', *ROOT.glob('*.py')):
+        shutil.copy2(source, package/source.name)
     for folder in ('dashboard','desktop'):
         shutil.copytree(ROOT/folder,package/folder,ignore=shutil.ignore_patterns('__pycache__'))
     (home/'config.yaml').write_text('plugins:\n  enabled: [delivery-shelf]\n  isolation: in_process\n')
@@ -31,10 +31,9 @@ def host(home):
     os.environ['HERMES_DASHBOARD_SESSION_TOKEN']='fictional-test-session'
     os.environ['HERMES_DISABLE_TELEMETRY']='1'
     sys.path.insert(0,str(SOURCE))
+    # Import performs the native API mount before the SPA catch-all. Mounting
+    # again can replace module identities while existing routes retain models.
     from hermes_cli import web_server
-    from hermes_cli.web_server_dashboard import _mount_plugin_api_routes, mount_spa
-    _mount_plugin_api_routes()
-    # Native order: plugin routes BEFORE catch-all, exactly as start_dashboard.
     return web_server
 
 
@@ -44,8 +43,11 @@ def probe():
         home=Path(directory)/'home'
         prepare(home)
         ws=host(home)
-        from hermes_cli.web_server_dashboard import mount_spa
-        mount_spa(ws.app)
+        routes = [getattr(route, 'path', '') for route in ws.app.routes]
+        catch_all = [i for i, route in enumerate(routes) if route == '/{full_path:path}']
+        plugin_routes = [i for i, route in enumerate(routes) if route.startswith('/api/plugins/')]
+        assert len(catch_all) == 1 and plugin_routes, routes
+        assert max(plugin_routes) < catch_all[0], routes
         headers={'X-Hermes-Session-Token':'fictional-test-session'}
         # No lifespan: exercise native HTTP/mount/auth without starting schedulers,
         # reconciling session banks, or invoking the host's environment bootstrap.

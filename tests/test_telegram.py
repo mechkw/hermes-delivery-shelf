@@ -105,10 +105,13 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         self.source = SimpleNamespace(user_id='17', chat_id='17', thread_id='9', message_id='22')
         self.identity = self.controller.identity(self.source, 'fictional-session', 'telegram:17:9', 'telegram')
         self.store = plugin._service().Store(self.home)
-        self.entry = self.store.create(plugin._service().EntryInput(
+        self.entry = self.create_fixture_entry(plugin._service().EntryInput(
             title='Fictional report', description='Preserve this description', tags=['Keep-Case'],
             kind='report', project='Fiction', session_id='original-session',
             file={'root':'workspaces', 'path':'old.md'}))
+
+    def create_fixture_entry(self, entry):
+        return self.store.create(entry)
 
     async def asyncTearDown(self):
         self.ctx.cleanup()
@@ -147,11 +150,29 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         # Exercise PTB's registered handler selection and callback, not a fabricated callback object.
         await selected.process_update(update)
 
-    async def offer(self, path='new.md', session_id='fictional-session'):
+    async def native_offer(self, path='new.md', session_id='fictional-session'):
+        # Native callback/CAS regressions target the panel API. Registered tools
+        # now use the separate delivered-bytes conversational offer contract.
         with self.session(session_id=session_id):
-            result = await asyncio.to_thread(self.ctx.tools['delivery_shelf_offer_update'],
+            result = await asyncio.to_thread(self.controller.offer,
                                             {'id':self.entry['id'], 'file':{'root':'workspaces','path':path}})
         return json.loads(result)
+
+    @contextmanager
+    def delivered_version(self, *paths, session_id='fictional-session'):
+        from hermes_state import SessionDB
+        db = SessionDB(self.home/'state.db')
+        try:
+            db.create_session(session_id, source='telegram')
+            db.append_message(session_id, 'assistant', '\n'.join(
+                'MEDIA:'+str(self.home/'workspaces'/path) for path in (paths or ('new.md',))))
+            yield db
+        finally:
+            db.close()
+
+    async def version_tool(self, name, args, **context):
+        with self.session(**context):
+            return json.loads(await asyncio.to_thread(self.ctx.tools[name], args))
 
     async def assisted_request(self):
         # Advanced explicit-file metadata completion retains its independent guard.
@@ -248,19 +269,19 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_file_silent_and_new_offer_keep_then_update(self):
         (self.home/'workspaces/old.md').write_text('Edited same file')
-        self.assertEqual((await self.offer('old.md'))['status'], 'same_file_silent')
+        self.assertEqual((await self.native_offer('old.md'))['status'], 'same_file_silent')
         self.assertEqual(self.sent(), [])
-        offered = await self.offer()
+        offered = await self.native_offer()
         self.assertEqual(offered['status'], 'offered')
         self.assertFalse(offered['saved'])
         self.assertEqual(self.store.get(self.entry['id']), self.entry)
-        self.assertEqual((await self.offer())['status'], 'already_offered')
+        self.assertEqual((await self.native_offer())['status'], 'already_offered')
         token = next(reversed(self.controller.panels))
         self.assertEqual([r[0]['text'] for r in self.sent()[-1]['reply_markup']['inline_keyboard']],
                          ['Update registration','Keep current'])
         await self.click(token, '1')
         self.assertEqual(self.store.get(self.entry['id']), self.entry)
-        self.assertEqual((await self.offer('third.md'))['status'], 'offered')
+        self.assertEqual((await self.native_offer('third.md'))['status'], 'offered')
         token = next(reversed(self.controller.panels))
         await self.click(token)
         saved = self.store.get(self.entry['id'])
@@ -274,14 +295,14 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Updated', self.edited()[-1]['text'])
 
     async def test_cas_conflict_and_file_policy_revocation(self):
-        await self.offer()
+        await self.native_offer()
         token = next(reversed(self.controller.panels))
         payload = {k:self.entry[k] for k in plugin._service().EntryInput.model_fields}
         revised = self.store.update(self.entry['id'], plugin._service().EntryUpdate(**payload, revision=1))
         await self.click(token)
         self.assertEqual(self.store.get(self.entry['id']), revised)
         self.assertNotIn('Updated', self.edited()[-1]['text'])
-        await self.offer('third.md')
+        await self.native_offer('third.md')
         token = next(reversed(self.controller.panels))
         (self.policy.parent/'allowed-roots.json').write_text('{}')
         await self.click(token)
@@ -289,18 +310,18 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_derivatives_cli_fallback_and_profile(self):
         for path in ('missing.md','../escape.md','.secret.md','credentials.md'):
-            self.assertFalse((await self.offer(path))['ok'])
+            self.assertFalse((await self.native_offer(path))['ok'])
         args = {'id':self.entry['id'], 'file':{'root':'workspaces','path':'new.md'}}
         with self.session(platform='cli'):
-            result = json.loads(await asyncio.to_thread(self.ctx.tools['delivery_shelf_offer_update'], args))
+            result = json.loads(await asyncio.to_thread(self.controller.offer, args))
         self.assertEqual(result['status'], 'unsupported')
         with self.session(profile='other'):
-            self.assertFalse(json.loads(await asyncio.to_thread(self.ctx.tools['delivery_shelf_offer_update'], args))['ok'])
+            self.assertFalse(json.loads(await asyncio.to_thread(self.controller.offer, args))['ok'])
         self.assertEqual(self.sent(), [])
 
     async def test_unload_reconnect_and_bounded_state(self):
         token = await self.panel()
-        await self.offer()
+        await self.native_offer()
         self.ctx.factory(self.app, object())
         self.assertEqual(self.controller.panels, {})
         await self.click(token)
@@ -374,11 +395,11 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         (self.policy.parent/'allowed-roots.json').write_text(json.dumps({
             'workspaces':str(self.home/'workspaces'), 'alias':str(self.home/'workspaces')}))
         with self.session():
-            result = json.loads(await asyncio.to_thread(self.ctx.tools['delivery_shelf_offer_update'],
+            result = json.loads(await asyncio.to_thread(self.controller.offer,
                 {'id':self.entry['id'],'file':{'root':'alias','path':'old.md'}}))
         self.assertEqual(result['status'], 'same_file_silent')
         self.assertEqual(self.sent(), [])
-        await self.offer()
+        await self.native_offer()
         token = next(reversed(self.controller.panels))
         self.policy.write_text('[]')
         await self.click(token)
@@ -389,8 +410,8 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         self.ctx.hooks['on_session_reset'](old_session_id='fictional-session', session_id='replacement')
         self.assertIn('changed', await self.controller.send(self.identity, epoch=epoch))
         self.assertEqual(self.sent(), [])
-        self.assertFalse((await self.offer())['ok'])  # pinned old agent cannot offer after reset
-        await self.offer(session_id='replacement')
+        self.assertFalse((await self.native_offer())['ok'])  # pinned old agent cannot offer after reset
+        await self.native_offer(session_id='replacement')
         token = next(reversed(self.controller.panels))
         self.capture.fail.add('editMessageText')
         await self.click(token)
@@ -406,14 +427,157 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(self.controller.retired_sessions), 128)
         self.assertTrue(self.controller.session_fenced)
         self.assertIn('unavailable', await self.controller.send(self.identity))
-        self.assertFalse((await self.offer())['ok'])
+        self.assertFalse((await self.native_offer())['ok'])
         self.assertEqual(self.sent(), [])
 
     async def test_transport_failure_never_reports_offer(self):
         self.capture.fail.add('sendMessage')
-        self.assertFalse((await self.offer())['ok'])
+        self.assertFalse((await self.native_offer())['ok'])
         self.assertEqual(self.controller.panels, {})
         self.assertEqual(self.store.get(self.entry['id']), self.entry)
+
+    async def test_registered_version_tools_require_delivery_and_exact_conversational_approval(self):
+        from hermes_state import SessionDB
+        db = SessionDB(self.home/'state.db')
+        try:
+            db.create_session('fictional-session', source='telegram')
+            args = {'id':self.entry['id'], 'file':{'root':'workspaces','path':'old.md'}}
+            async def tool(name, values):
+                with self.session():
+                    return json.loads(await asyncio.to_thread(self.ctx.tools[name], values))
+            self.assertFalse((await tool('delivery_shelf_offer_update', args))['ok'])
+            db.append_message('fictional-session', 'assistant', 'MEDIA:'+str(self.home/'workspaces/old.md'))
+            unchanged = await tool('delivery_shelf_offer_update', args)
+            self.assertEqual(unchanged['status'], 'unchanged', unchanged)
+            self.assertFalse(unchanged['notify_user'])
+            (self.home/'workspaces/old.md').write_text('Newly delivered changed same-path bytes')
+            db.append_message('fictional-session', 'assistant', 'MEDIA:'+str(self.home/'workspaces/old.md'))
+            offered = await tool('delivery_shelf_offer_update', args)
+            self.assertEqual(offered['status'], 'offered', offered)
+            self.assertFalse(offered['saved'])
+            self.assertIn('Yes / Always for this delivery / Keep current.', offered['message'])
+            self.assertEqual(self.store.get(self.entry['id']), self.entry)
+            response = {'offer_id':offered['offer_id'], 'decision':'yes'}
+            self.policy.write_text('[]')
+            self.assertFalse((await tool('delivery_shelf_respond_update', response))['ok'])
+            self.assertEqual(self.store.get(self.entry['id']), self.entry)
+            self.policy.write_text('["17"]')
+            saved = await tool('delivery_shelf_respond_update', response)
+            self.assertTrue(saved['ok'], saved)
+            updated = self.store.get(self.entry['id'])
+            self.assertEqual(updated, saved['data'])
+            self.assertEqual(updated['revision'], 2)
+            self.assertEqual(len(updated['versions']), 2)
+            self.assertEqual(updated['versions'][0], self.entry['versions'][0])
+            self.assertEqual(updated['session_id'], 'fictional-session')
+            for key in ('id','title','description','tags','kind','project','created'):
+                self.assertEqual(updated[key], self.entry[key])
+            self.assertFalse((await tool('delivery_shelf_respond_update', response))['ok'])
+            self.assertEqual(self.store.get(self.entry['id']), updated)
+            self.assertEqual(self.sent(), [])
+        finally:
+            db.close()
+
+    async def test_registered_version_offer_rejects_invalid_derivatives_with_delivery_provenance(self):
+        paths = ('missing.md', '../escape.md', '.secret.md', 'credentials.md')
+        (self.home/'workspaces/new.md').write_text('A concrete new version')
+        for path in paths[1:]:
+            (self.home/'workspaces'/path).write_text('Forbidden derivative fixture')
+        args = {'id':self.entry['id'], 'file':{'root':'workspaces','path':'new.md'}}
+        with self.delivered_version() as db:
+            control = await self.version_tool('delivery_shelf_offer_update', args)
+            self.assertEqual(control.get('status'), 'offered', control)
+            for path in paths:
+                with self.subTest(path=path):
+                    db.append_message('fictional-session', 'assistant', 'MEDIA:'+str(self.home/'workspaces'/path))
+                    invalid = {**args, 'file':{'root':'workspaces','path':path}}
+                    result = await self.version_tool('delivery_shelf_offer_update', invalid)
+                    self.assertFalse(result['ok'], result)
+                    self.assertNotIn('unavailable in this conversation', result['error'].lower())
+                    self.assertEqual(self.store.get(self.entry['id']), self.entry)
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.controller.panels, {})
+
+    async def test_registered_version_tools_refuse_foreign_profile_and_home(self):
+        from contextlib import closing
+        import sqlite3
+        (self.home/'workspaces/new.md').write_text('A concrete new version')
+        args = {'id':self.entry['id'], 'file':{'root':'workspaces','path':'new.md'}}
+        with self.delivered_version():
+            offered = await self.version_tool('delivery_shelf_offer_update', args)
+            self.assertEqual(offered['status'], 'offered', offered)
+            response = {'offer_id':offered['offer_id'], 'decision':'always'}
+            for name, values in (('delivery_shelf_offer_update', args),
+                                 ('delivery_shelf_respond_update', response)):
+                with self.subTest(tool=name, boundary='profile'):
+                    result = await self.version_tool(name, values, profile='other')
+                    self.assertFalse(result['ok'], result)
+                    self.assertIn('profile', result['error'].lower())
+                other = Path(self.tmp.name)/'foreign-home'
+                other.mkdir(exist_ok=True)
+                bound = set_hermes_home_override(other)
+                try:
+                    with self.subTest(tool=name, boundary='home'):
+                        result = await self.version_tool(name, values)
+                        self.assertFalse(result['ok'], result)
+                        self.assertIn('profile', result['error'].lower())
+                        self.assertEqual(list(other.iterdir()), [])
+                finally:
+                    reset_hermes_home_override(bound)
+                with closing(sqlite3.connect(self.home/'state.db')) as conn, conn:
+                    conn.execute("UPDATE sessions SET profile_name='other' WHERE id='fictional-session'")
+                try:
+                    with self.subTest(tool=name, boundary='source-profile'):
+                        result = await self.version_tool(name, values)
+                        self.assertFalse(result['ok'], result)
+                        self.assertEqual(result['error'], 'Recent files are unavailable in this conversation. '
+                                         'Ask me to save the file in normal chat.')
+                finally:
+                    with closing(sqlite3.connect(self.home/'state.db')) as conn, conn:
+                        conn.execute("UPDATE sessions SET profile_name='default' WHERE id='fictional-session'")
+                self.assertEqual(self.store.get(self.entry['id']), self.entry)
+            kept = await self.version_tool('delivery_shelf_respond_update', {**response, 'decision':'keep'})
+            self.assertEqual(kept['status'], 'kept', kept)
+        self.assertEqual(self.store.get(self.entry['id']), self.entry)
+        self.assertEqual(self.sent(), [])
+
+    async def test_registered_version_tools_reject_owner_and_response_context_changes(self):
+        (self.home/'workspaces/new.md').write_text('A concrete new version')
+        args = {'id':self.entry['id'], 'file':{'root':'workspaces','path':'new.md'}}
+        with self.delivered_version() as db:
+            db.create_session('other-session', source='telegram')
+            db.append_message('other-session', 'assistant', 'MEDIA:'+str(self.home/'workspaces/new.md'))
+            offered = await self.version_tool('delivery_shelf_offer_update', args)
+            self.assertEqual(offered['status'], 'offered', offered)
+            response = {'offer_id':offered['offer_id'], 'decision':'always'}
+            for changes in ({'user_id':'18'}, {'chat_id':''}, {'thread_id':'bad'},
+                            {'session_key':''}, {'session_id':''}):
+                for name, values in (('delivery_shelf_offer_update', args),
+                                     ('delivery_shelf_respond_update', response)):
+                    with self.subTest(tool=name, context=changes):
+                        result = await self.version_tool(name, values, **changes)
+                        self.assertFalse(result['ok'], result)
+                        self.assertEqual(self.store.get(self.entry['id']), self.entry)
+            self.policy.write_text('["17", "18"]')
+            for changes in ({'user_id':'18'}, {'chat_id':'18'}, {'thread_id':'10'},
+                            {'message_id':'23'}, {'session_key':'telegram:17:10'},
+                            {'session_id':'other-session'}):
+                with self.subTest(response_context=changes):
+                    result = await self.version_tool('delivery_shelf_respond_update', response, **changes)
+                    self.assertFalse(result['ok'], result)
+                    self.assertIn('another session or lifecycle', result['error'])
+                    self.assertEqual(self.store.get(self.entry['id']), self.entry)
+            self.policy.write_text('[]')
+            for name, values in (('delivery_shelf_offer_update', args),
+                                 ('delivery_shelf_respond_update', response)):
+                result = await self.version_tool(name, values)
+                self.assertFalse(result['ok'], result)
+                self.assertIn('owner or session changed', result['error'])
+            self.policy.write_text('["17"]')
+            kept = await self.version_tool('delivery_shelf_respond_update', {**response, 'decision':'keep'})
+            self.assertEqual(kept['status'], 'kept', kept)
+        self.assertEqual(self.store.get(self.entry['id']), self.entry)
+        self.assertEqual(self.sent(), [])
 
 
 if __name__ == '__main__': unittest.main()

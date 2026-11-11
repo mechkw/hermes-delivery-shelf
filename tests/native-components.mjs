@@ -6,6 +6,7 @@ import {createRequire} from 'node:module';
 export const uiExports={
  'components/ui/button':['Button'], 'components/ui/input':['Input'],
  'components/ui/checkbox':['Checkbox'],'components/ui/switch':['Switch'],
+ 'components/ui/codicon':['Codicon'],'components/ui/segmented-control':['SegmentedControl'],
  'components/ui/textarea':['Textarea'],'components/ui/search-field':['SearchField'],
  'components/ui/select':['Select','SelectTrigger','SelectValue','SelectContent','SelectItem'],
  'components/ui/dialog':['Dialog','DialogContent','DialogHeader','DialogTitle','DialogDescription','DialogFooter'],

@@ -1,9 +1,11 @@
 // Metadata regressions use actual host components/loaders and the fictional API.
 import {expect} from '@playwright/test';
+import {nativeShelf,nativeMetadataCases,entryButton,entrySurface} from './native-shelf-browser.mjs';
 export async function metadataCases(page,adapter,api){
  const dialog=()=>page.getByRole('dialog');
  const choose=async(label,name)=>{await page.getByRole('combobox',{name:label,exact:true}).click();await page.getByRole('option',{name,exact:true}).click();};
  for(const id of ['conversation-bookmarks','delivery-shelf']){
+  if(nativeShelf(adapter,id)){await nativeMetadataCases(page,api);continue;}
   const bookmarks=id==='conversation-bookmarks',tab=bookmarks?'Bookmarks':'Deliverables',text=bookmarks?'note':'description',edit=bookmarks?'Edit bookmark':'Edit metadata',field=bookmarks?'Note':'Description';
   const tags=['design, decisions','say "hello"','café 日本語'];
   const prefix='/api/plugins/'+id;
@@ -56,8 +58,8 @@ export async function metadataCases(page,adapter,api){
 export async function pendingMutationCases(page,adapter,api,base){
  for(const id of ['conversation-bookmarks','delivery-shelf'])for(const change of ['profile',...(adapter==='desktop'?['connection','dispose']:['dispose'])]){
   await page.goto(base+'/qa/'+adapter);await expect(page.getByRole('tab')).toHaveCount(2);await page.getByRole('tab',{name:id==='conversation-bookmarks'?'Bookmarks':'Deliverables',exact:true}).click();
-  const old=(await api(id,'/entries')).items[0];await page.getByRole('button',{name:old.title,exact:true}).click();
-  const dialog=page.getByRole('dialog');await dialog.getByRole('button',{name:id==='conversation-bookmarks'?'Edit bookmark':'Edit metadata'}).click();
+  const old=(await api(id,'/entries')).items[0];await entryButton(page,adapter,id,old.title).click();
+  const dialog=entrySurface(page,adapter,id);await dialog.getByRole('button',{name:id==='conversation-bookmarks'?'Edit bookmark':'Edit metadata'}).click();
   await dialog.getByLabel('Title',{exact:true}).fill(old.title);
   let release,seen;const held=new Promise(r=>release=r),entered=new Promise(r=>seen=r);
   const pattern='**/api/plugins/'+id+'/entries/'+old.id+'*';
@@ -79,7 +81,7 @@ export async function sourceFenceCases(page,adapter,base){
   let release,seen;const held=new Promise(r=>release=r),entered=new Promise(r=>seen=r);
   const pattern='**/api/plugins/'+id+'/sources/sessions?**';
   await page.route(pattern,async route=>{if(new URL(route.request().url()).searchParams.get('q')!=='fence'){await route.continue();return;}seen();await held;await route.fulfill({json:{items:[{id:'stale-secret',title:'Retired source result',updated_at:null}],has_more:false}});});
-  await page.getByRole('dialog').getByLabel('Search conversations',{exact:true}).fill('fence');await entered;
+  await page.getByRole('dialog').getByLabel(nativeShelf(adapter,id)?'Find conversation':'Search conversations',{exact:true}).fill('fence');await entered;
   await page.evaluate(({adapter,change})=>{if(adapter==='desktop'){if(change==='dispose')for(const id of ['conversation-bookmarks','delivery-shelf'])window.__QA_UNLOAD__(id);else window.__QA_SDK__.host.state[change==='profile'?'profile':'connectionId'].set(change==='profile'?'foreign':'next-connection');}else if(change==='profile')window.__QA_PROFILE__('foreign');else window.__QA_UNMOUNT__();},{adapter,change});
   await expect(page.getByRole('dialog')).toHaveCount(0);release();await page.unroute(pattern,{behavior:'wait'});await page.waitForTimeout(250);
   await expect(page.getByText('Retired source result',{exact:false})).toHaveCount(0);

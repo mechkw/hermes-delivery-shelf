@@ -1,6 +1,7 @@
 import {expect} from '@playwright/test';
 import {writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {nativeShelf,nativeTitleCases,nativeFocusCases} from './native-shelf-browser.mjs';
 
 export async function sourceDetailCases(page,adapter,api,sourceBank){
  const id='conversation-bookmarks',pattern='**/api/plugins/conversation-bookmarks/status*';
@@ -69,6 +70,7 @@ export async function titleBoundsCases(page,adapter,api,proof){
  await page.setViewportSize({width:360,height:640});
  const evidence=[];
  for(const id of ['conversation-bookmarks','delivery-shelf']){
+  if(nativeShelf(adapter,id)){await nativeTitleCases(page,api,proof);continue;}
   await page.getByRole('tab',{name:id==='conversation-bookmarks'?'Bookmarks':'Deliverables',exact:true}).click();
   await refreshCollection(page,id);
   for(const title of ['UnbrokenTitle'.repeat(12),'A long card title with words that must wrap instead of overflowing the collection card at a narrow viewport '.repeat(2).slice(0,160)]){
@@ -105,6 +107,7 @@ export async function focusEditorCases(page,adapter,api,proof){
   return rect;
  };
  for(const id of ['conversation-bookmarks','delivery-shelf']){
+  if(nativeShelf(adapter,id)){await nativeFocusCases(page,api,proof);continue;}
   const bookmarks=id==='conversation-bookmarks';
   await page.getByRole('tab',{name:bookmarks?'Bookmarks':'Deliverables',exact:true}).click();
   const entry=await api(id,'/entries',{method:'POST',body:JSON.stringify({title:'Keyboard focus regression',...(bookmarks?{session_id:'fictional-session-01'}:{})})});

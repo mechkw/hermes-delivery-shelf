@@ -140,8 +140,8 @@ def main():
             home = root/'home'
             package = home/'plugins/delivery-shelf'
             package.mkdir(parents=True)
-            for name in ('plugin.yaml', '__init__.py','telegram_shelf.py','recent_artifacts.py'):
-                shutil.copy2(ROOT/name, package/name)
+            for source in (ROOT/'plugin.yaml', *ROOT.glob('*.py')):
+                shutil.copy2(source, package/source.name)
             for name in ('dashboard', 'desktop'):
                 shutil.copytree(ROOT/name, package/name, ignore=shutil.ignore_patterns('__pycache__'))
             (home/'config.yaml').write_text(

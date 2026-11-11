@@ -804,6 +804,11 @@ class Controller:
         import sqlite3
         commit_authorized = False
 
+        def on_commit_authorized():
+            nonlocal commit_authorized
+            # After final authorization, failure cannot prove a rollback.
+            commit_authorized = True
+
         def failure(detail):
             if commit_authorized:
                 return 'Unable to confirm the save. Open Saved → Delivery Shelf to check before retrying.'
@@ -831,7 +836,8 @@ class Controller:
                     (identity['platform'] != 'cli' and not identity['session_key'])):
                 raise ValueError('Current conversation unavailable. Open a conversation and use /shelf add, or choose a file in Saved → Delivery Shelf.')
             from .agent_quick_add import save
-            return save(self, identity, raw, authorize, loop)
+            return save(self, identity, raw, authorize, loop,
+                        on_commit_authorized=on_commit_authorized)
         except ValidationError:
             return failure('recent file or metadata is unsupported by the current policy.')
         except HTTPException as exc:

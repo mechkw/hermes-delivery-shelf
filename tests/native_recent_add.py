@@ -39,8 +39,13 @@ async def main():
         try:
             with ExitStack() as guards:
                 injection = guards.enter_context(patch.object(PluginContext, 'inject_message', side_effect=AssertionError('No injection allowed')))
-                llm = guards.enter_context(patch.object(PluginContext, 'llm', new_callable=PropertyMock,
-                                                       side_effect=AssertionError('No LLM allowed')))
+                model_calls = []
+                async def complete(**kwargs):
+                    model_calls.append(kwargs)
+                    return SimpleNamespace(parsed={'title':'Native selected file',
+                        'description':'Fictional selected content.', 'tags':['selected']})
+                guards.enter_context(patch.object(PluginContext, 'llm', new_callable=PropertyMock,
+                    return_value=SimpleNamespace(acomplete_structured=complete)))
                 await asyncio.to_thread(manager.discover_and_load)
                 loaded = [p for p in manager.list_plugins() if p['name']=='delivery-shelf']
                 assert len(loaded)==1 and not loaded[0]['error'], loaded
@@ -52,6 +57,7 @@ async def main():
                 with patch('hermes_cli.plugins.get_plugin_manager', return_value=manager):
                     adapter._wire_plugin_handlers(app)
                 controller = manager.get_platform_handler_factories('telegram')[0][0].__self__
+                controller.api.Store(home).save_settings({'generate_metadata':False})
                 handler = manager._plugin_commands['shelf']['handler']
                 search = registry.get_entry('delivery_shelf_search', scope=manager.scope_key).handler
                 runner = ForumRunner()
@@ -63,6 +69,9 @@ async def main():
                                           created_at=now, updated_at=now)
                 db = SessionDB(home/'state.db')
                 db.create_session(session.session_id, source='telegram', user_id='18')
+                row = db.append_message(session.session_id, 'assistant', 'Prepare the fictional files.')
+                with sqlite3.connect(home/'state.db') as conn:
+                    conn.execute("UPDATE messages SET role='user' WHERE id=?", (row,))
                 def deliver(*names):
                     return db.append_message(session.session_id, 'assistant', '\n'.join(
                         'MEDIA:'+str(home/'workspaces'/name) for name in names))
@@ -78,23 +87,29 @@ async def main():
                         'chat_instance':'fictional','data':data,
                         'message':{'message_id':message,'date':1,'message_thread_id':thread,
                                    'chat':{'id':-100,'type':'supergroup'},'text':'Shelf'}}}, app.bot))
+                async def manual_add():
+                    assert await command('') is None
+                    message = capture.serial
+                    await click(buttons()[0]['callback_data'], message)
+                    return message
                 deliver('first.md')
-                assert await command('add') is None
+                before_calls = list(capture.calls)
+                assert await command('add')=='Saved to Delivery Shelf: first.md'
                 first = entries()[0]
                 assert first['title']=='first.md' and first['session_id']==session.session_id
-                assert capture.calls[-1][1]['message_thread_id']==9
-                assert 'Saved to Delivery Shelf' in capture.calls[-1][1]['text']
-                assert await command('add Different #Ignored --description "Keep existing"') is None
+                assert capture.calls==before_calls and model_calls==[]
+                assert await command('add Different #Ignored --description "Keep existing"')=='Already saved to Delivery Shelf: first.md'
                 assert entries()==[first]
-                assert 'Already saved' in capture.calls[-1][1]['text']
+                assert capture.calls==before_calls and model_calls==[]
                 # A newer delivery set wins; preview does not save anything.
                 deliver('first.md','second.md')
                 assert await command('') is None
+                assert capture.calls[-1][1]['message_thread_id']==9
                 add = buttons()[0]['callback_data']
                 message = capture.serial
                 await click(add, message)
                 choices = buttons()
-                assert [b['text'] for b in choices]==['first.md','second.md','Cancel']
+                assert [b['text'] for b in choices]==['first.md','second.md','Save all 2 files','Cancel']
                 assert entries()==[first]
                 for who, topic in ((18,9),(17,10)):
                     await click(choices[1]['callback_data'], message, who, topic)
@@ -111,8 +126,8 @@ async def main():
                     (home/'workspaces'/name).write_text('Fictional publication regression')
                 for outcome in ('rejected', 'cancelled'):
                     deliver('old.md', 'new.md')
-                    assert await command('add') is None
-                    old_choice, message = buttons()[1]['callback_data'], capture.serial
+                    message = await manual_add()
+                    old_choice = buttons()[1]['callback_data']
                     await click(old_choice, message)
                     await click(buttons()[0]['callback_data'], message)  # View saved file
                     add = buttons()[0]['callback_data']
@@ -152,26 +167,26 @@ async def main():
                     for stale in (old_choice, unpublished):
                         await click(stale, message)
                         assert capture.calls[-1][1]['show_alert'] and entries() == before
-                    assert await command('add') is None
-                    retry_buttons, retry_message = buttons(), capture.serial
+                    retry_message = await manual_add()
+                    retry_buttons = buttons()
                     assert retry_buttons[1]['callback_data'] not in (old_choice, unpublished)
                     await click(retry_buttons[-1]['callback_data'], retry_message)
                     assert 'Cancelled' in capture.calls[-1][1]['text'] and entries() == before
-                assert await command('add') is None
-                await click(buttons()[1]['callback_data'], capture.serial)
+                message = await manual_add()
+                await click(buttons()[1]['callback_data'], message)
                 saved = entries()
                 assert len(saved) == len(before) + 1 and saved[0]['file']['path'] == 'third.md'
                 # Lifecycle hook fencing still owns session reset.
-                assert await command('add') is None
+                await manual_add()
                 stale = buttons()[0]['callback_data']
                 message = capture.serial
                 manager.invoke_hook('on_session_reset', old_session_id=session.session_id, session_id='fresh')
                 await click(stale, message)
                 assert capture.calls[-1][1]['show_alert'] and entries()==saved
                 injection.assert_not_called()
-                llm.assert_not_called()
+                assert len(model_calls)==4, model_calls
                 print('PASS native PluginManager + TelegramAdapter wiring + GatewayRunner dispatcher + real PTB Application')
-                print('PASS shared-topic owner differs from original session author; false injection permission; zero injection/LLM access')
+                print('PASS shared-topic owner differs from original session author; false injection permission; zero injection; four bounded manual metadata calls')
                 print('PASS command direct save/readback; exact duplicate unchanged; panel Add -> exact chooser -> authenticated direct save')
                 print('PASS rejected chooser AND error edits, cancelled edit, unpublished/stale replay refusal, clean retry and exact save')
                 print('PASS foreign owner/topic, replay and reset refusal; capture transport only, no live Telegram send')

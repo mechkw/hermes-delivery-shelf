@@ -4,6 +4,7 @@
 import {build} from 'esbuild';
 import {createRequire} from 'node:module';
 import {realUI} from './native-components.mjs';
+import {entryButton,entrySurface,returnToShelf} from './native-shelf-browser.mjs';
 import {metadataCases,pendingMutationCases,sourceFenceCases} from './metadata-browser.mjs';
 import {shelfRedesignCases,shelfGenerationFenceCases} from './shelf-redesign-browser.mjs';
 import {selectorCases} from './selector-browser.mjs';
@@ -78,19 +79,24 @@ window.__QA_UNMOUNT__=()=>root.unmount();
 `;
 const sdkStub=`${ui.imports}
 import React from 'react';import {atom} from 'nanostores';
-export const host={state:{profile:atom('default'),connectionId:atom('fixture')},navigate:path=>{window.__QA_NAVIGATED__=path;},openSession:async(id,options)=>{window.__QA_OPENED__={id,options};}};
+import {COMPOSER_AREAS} from '${source}/apps/desktop/src/app/chat/composer/contrib.ts';
+import {TITLEBAR_AREAS} from '${source}/apps/desktop/src/sdk/areas.ts';
+import {PALETTE_AREA} from '${source}/apps/desktop/src/app/command-palette/contrib.ts';
+export {atom,COMPOSER_AREAS,TITLEBAR_AREAS,PALETTE_AREA};
+export const host={state:{profile:atom('default'),connectionId:atom('fixture'),focusedSessionOwner:atom({connectionId:'fixture',profile:'default'}),focusedStoredSessionId:atom(null)},notify:message=>{window.__QA_NOTIFICATION__=message;},navigate:path=>{window.__QA_NAVIGATED__=path;},openSession:async(id,options)=>{window.__QA_OPENED__={id,options};}};
 export const useValue=a=>React.useSyncExternalStore(a.subscribe,a.get,a.get);
 export const ROUTES_AREA='routes',SIDEBAR_NAV_AREA='sidebar.nav';
-window.__QA_SDK__={host,useValue,ROUTES_AREA,SIDEBAR_NAV_AREA,${ui.names.join(',')}};
+window.__QA_SDK__={host,useValue,atom,COMPOSER_AREAS,TITLEBAR_AREAS,PALETTE_AREA,ROUTES_AREA,SIDEBAR_NAV_AREA,${ui.names.join(',')}};
 export function installPluginSdk(){}
 const blob=s=>URL.createObjectURL(new Blob([s],{type:'text/javascript'}));
 export const sdkImportMap=()=>({
  'react':blob('export default window.__QA_REACT__;export const {useState,useEffect,useRef,useId,useMemo}=window.__QA_REACT__;'),
- '@hermes/plugin-sdk':blob('export const {host,useValue,ROUTES_AREA,SIDEBAR_NAV_AREA,${ui.names.join(',')}}=window.__QA_SDK__;')
+ '@hermes/plugin-sdk':blob('export const {host,useValue,atom,COMPOSER_AREAS,TITLEBAR_AREAS,PALETTE_AREA,ROUTES_AREA,SIDEBAR_NAV_AREA,${ui.names.join(',')}}=window.__QA_SDK__;')
 });`;
 const contextStub=`export const declaredCapabilities=()=>[];
 import {registry} from '${source}/apps/desktop/src/contrib/registry.ts';
-export function createPluginContext(id,track){return {registerMany(items){const dispose=registry.registerMany(items.map(c=>({...c,id:id+':'+c.id,source:'plugin:'+id})));track(dispose);return dispose;},onDispose:track,os:{writeClipboard:async(text)=>{window.__QA_CLIPBOARD__=text;return true;}},rest:(path,opts={})=>window.__QA_FETCH__('/api/plugins/'+id+path,{method:opts.method||'GET',headers:opts.body?{'Content-Type':'application/json'}:undefined,body:opts.body?JSON.stringify(opts.body):undefined})};}`;
+import {settingsPageContribution} from '${source}/apps/desktop/src/contrib/settings-pages.ts';
+export function createPluginContext(id,track){const registerMany=items=>{const dispose=registry.registerMany(items.map(c=>({...c,id:id+':'+c.id,source:'plugin:'+id})));track(dispose);return dispose;};return {registerMany,registerSettingsPage:page=>registerMany([settingsPageContribution(page)]),onDispose:track,os:{writeClipboard:async(text)=>{window.__QA_CLIPBOARD__=text;return true;}},rest:(path,opts={})=>window.__QA_FETCH__('/api/plugins/'+id+path,{method:opts.method||'GET',headers:opts.body?{'Content-Type':'application/json'}:undefined,body:opts.body?JSON.stringify(opts.body):undefined})};}`;
 const desktopEntry=common+`
 ${ui.nativeBootstrap}
 import {loadRuntimePlugin,unloadRuntimePlugin} from '${source}/apps/desktop/src/contrib/runtime-loader.ts';
@@ -109,7 +115,9 @@ window.__QA_RECORDS__=$pluginRecords;
 function App(){
  React.useSyncExternalStore($registryVersion.subscribe,$registryVersion.get,$registryVersion.get);
  const routes=registry.getArea('routes'),nav=registry.getArea('sidebar.nav');
- return <><nav aria-label="Native contributions">{nav.map(c=><a key={c.id} href={c.data.path}>{c.data.label}</a>)}</nav>{routes[0]?React.createElement(routes[0].render):<p>No active Saved plugins.</p>}</>;
+ // Host tree-group.tsx mounts route panes in an inset-0 overflow-auto layer.
+ // The real stylesheet deliberately prevents html/body/root scrolling.
+ return <div style={{height:'100%',display:'flex',flexDirection:'column'}}><nav aria-label="Native contributions">{nav.map(c=><a key={c.id} href={c.data.path}>{c.data.label}</a>)}</nav><main style={{flex:1,minHeight:0,overflow:'auto'}}>{routes[0]?React.createElement(routes[0].render):<p>No active Saved plugins.</p>}</main></div>;
 }
 root.render(<App/>);
 for(const id of ids){codes[id]=await (await fetch('/api/qa/desktop/'+id,{headers:{'X-Hermes-Session-Token':'fictional-test-session'}})).text();await window.__QA_LOAD__(id);}
@@ -159,7 +167,7 @@ async function independentState(page,fixture,api,base,auth,scenario,order){
  await expect(page.getByRole('link',{name:'Saved',exact:true})).toHaveCount(1);
  const available=fixture.frontend.filter(id=>fixture.enabled.includes(id));
  await expect(page.getByRole('tab')).toHaveCount(available.length);
- if(available.length)await expect(page.getByRole('button',{name:'Saved '+available[0],exact:true})).toBeVisible();
+ if(available.length)await expect(entryButton(page,'desktop',available[0],'Saved '+available[0])).toBeVisible();
  await expect(page.getByRole('button',{name:/Install or enable/})).toHaveCount(2-available.length);
  await expect(page.getByText(/Could not open your shelf|Could not load bookmarks|Plugin not found/)).toHaveCount(0);
  expect(await page.evaluate(()=>window.__QA_REQUESTS__.every(r=>r.method==='GET'))).toBe(true);
@@ -202,7 +210,7 @@ async function availabilityFailures(page,adapter){
   await availability.getByRole('button',{name:'Retry deliverables',exact:true}).click();
   await expect(page.getByRole('tab')).toHaveCount(2);
   await page.getByRole('tab',{name:'Deliverables',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Saved delivery-shelf',exact:true})).toBeVisible();
+  await expect(entryButton(page,adapter,'delivery-shelf','Saved delivery-shelf')).toBeVisible();
  }
  if(adapter==='desktop'){
   let release,seen;
@@ -212,7 +220,7 @@ async function availabilityFailures(page,adapter){
   await page.evaluate(()=>window.__QA_SDK__.host.state.connectionId.set('held-connection'));
   await entered;
   await expect(page.getByRole('tab',{name:'Deliverables',exact:true})).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Saved delivery-shelf',exact:true})).toHaveCount(0);
+  await expect(entryButton(page,adapter,'delivery-shelf','Saved delivery-shelf')).toHaveCount(0);
   await page.evaluate(()=>window.__QA_SDK__.host.state.connectionId.set('recovered-connection'));
   await expect(page.getByRole('tab')).toHaveCount(2);
   release();await page.unroute(pattern,{behavior:'wait'});
@@ -280,17 +288,18 @@ try{
     for(const id of fixture.enabled){
      const label=id==='conversation-bookmarks'?'Bookmarks':'Deliverables';
      await page.getByRole('tab',{name:label,exact:true}).click();
-     await expect(page.getByRole('button',{name:'Saved '+id,exact:true})).toBeVisible();
+     await expect(entryButton(page,adapter,id,'Saved '+id)).toBeVisible();
      // Edit through each independently scoped UI transport; verify actual backend.
-     await page.getByRole('button',{name:'Saved '+id,exact:true}).click();
-     const dialog=page.getByRole('dialog');
+     await entryButton(page,adapter,id,'Saved '+id).click();
+     const dialog=entrySurface(page,adapter,id);
      await dialog.getByRole('button',{name:id==='conversation-bookmarks'?'Edit bookmark':'Edit metadata'}).click();
      const field=id==='conversation-bookmarks'?dialog.getByLabel('Note',{exact:false}):dialog.getByLabel('Description',{exact:false});
      const value=adapter+' '+order+' verified';await field.fill(value);
-     await dialog.getByRole('button',{name:'Save changes'}).click();await expect(dialog).not.toBeVisible();
+     await dialog.getByRole('button',{name:'Save changes'}).click();
+     if(adapter==='desktop'&&id==='delivery-shelf'){await expect(dialog.getByRole('button',{name:'Edit metadata'})).toBeVisible();await returnToShelf(page,adapter,id);}else await expect(dialog).not.toBeVisible();
      const list=await api(id,'/entries');expect(list.total).toBe(1);expect(list.items[0][id==='conversation-bookmarks'?'note':'description']).toBe(value);
     }
-    await expect(page.getByRole('button',{name:'Saved '+fixture.enabled[fixture.enabled.length-1],exact:true})).toBeVisible();
+    await expect(entryButton(page,adapter,fixture.enabled[fixture.enabled.length-1],'Saved '+fixture.enabled[fixture.enabled.length-1])).toBeVisible();
     await expect(page.getByText(/Loading (your shelf|registered deliveries|bookmarks)/)).toHaveCount(0);
     for(const width of [360,768,1440]){
      await page.setViewportSize({width,height:1000});
@@ -331,22 +340,22 @@ try{
     if(adapter==='desktop'){
      await page.evaluate(()=>window.__QA_SDK__.host.state.profile.set('foreign'));
      await expect(page.getByRole('tab')).toHaveCount(0);
-     await expect(page.getByRole('button',{name:/^Saved (conversation-bookmarks|delivery-shelf)$/})).toHaveCount(0);
+     await expect(page.getByRole('button',{name:/^(Open delivery )?Saved (conversation-bookmarks|delivery-shelf)$/})).toHaveCount(0);
      await page.evaluate(()=>window.__QA_SDK__.host.state.profile.set('default'));
-     await expect(page.getByRole('button',{name:/^Saved (conversation-bookmarks|delivery-shelf)$/})).toBeVisible();
+     await expect(page.getByRole('button',{name:/^(Open delivery )?Saved (conversation-bookmarks|delivery-shelf)$/})).toBeVisible();
      await page.evaluate(()=>{for(const id of ['conversation-bookmarks','delivery-shelf'])window.__QA_UNLOAD__(id);});
      await expect(page.getByRole('link',{name:'Saved',exact:true})).toHaveCount(0);await expect(page.getByRole('heading',{name:'Saved',exact:true})).toHaveCount(0);
     }else{
      await page.evaluate(()=>window.__QA_PROFILE__('foreign'));
-     await expect(page.getByRole('button',{name:/^Saved (conversation-bookmarks|delivery-shelf)$/})).toHaveCount(0);
+     await expect(page.getByRole('button',{name:/^(Open delivery )?Saved (conversation-bookmarks|delivery-shelf)$/})).toHaveCount(0);
      await expect(page.getByRole('link',{name:'Saved',exact:true})).toHaveCount(0);
      await page.evaluate(()=>window.__QA_PROFILE__('default'));
      await expect(page.getByRole('link',{name:'Saved',exact:true})).toHaveCount(1);
-     await expect(page.getByRole('button',{name:/^Saved (conversation-bookmarks|delivery-shelf)$/})).toBeVisible();
+     await expect(page.getByRole('button',{name:/^(Open delivery )?Saved (conversation-bookmarks|delivery-shelf)$/})).toBeVisible();
     }
     expect(errors).toEqual([]);
     rows.push({scenario,adapter,order,passed:true});console.log('PASS',scenario,adapter,order);
-   }catch(error){await page.screenshot({path:join(proof,'failure.png'),fullPage:true});await writeFile(join(proof,'failure-dom.json'),JSON.stringify(await page.evaluate(()=>({active:document.activeElement?.outerHTML,choices:[...document.querySelectorAll('[role=combobox]')].map(n=>({html:n.outerHTML,rect:n.getBoundingClientRect().toJSON(),ancestors:[...function*(x){while(x){yield x;x=x.parentElement;}}(n)].map(x=>({tag:x.tagName,hidden:x.getAttribute('aria-hidden'),cls:x.className,style:x.getAttribute('style'),display:getComputedStyle(x).display,visibility:getComputedStyle(x).visibility,contentVisibility:getComputedStyle(x).contentVisibility,rect:x.getBoundingClientRect().toJSON(),connected:x.isConnected}))}))})),null,2));console.error({scenario,adapter,order,errors,body:await page.locator('body').innerText(),logs});throw error;}
+   }catch(error){await writeFile(join(proof,'failure-server.log'),logs);await page.screenshot({path:join(proof,'failure.png'),fullPage:true});await writeFile(join(proof,'failure-dom.json'),JSON.stringify(await page.evaluate(()=>({active:document.activeElement?.outerHTML,choices:[...document.querySelectorAll('[role=combobox]')].map(n=>({html:n.outerHTML,rect:n.getBoundingClientRect().toJSON(),ancestors:[...function*(x){while(x){yield x;x=x.parentElement;}}(n)].map(x=>({tag:x.tagName,hidden:x.getAttribute('aria-hidden'),cls:x.className,style:x.getAttribute('style'),display:getComputedStyle(x).display,visibility:getComputedStyle(x).visibility,contentVisibility:getComputedStyle(x).contentVisibility,rect:x.getBoundingClientRect().toJSON(),connected:x.isConnected}))}))})),null,2));console.error({scenario,adapter,order,errors,body:await page.locator('body').innerText(),logs});throw error;}
    finally{await context.close();}
   }
   await stop();

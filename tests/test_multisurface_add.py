@@ -26,7 +26,7 @@ class NativeContext(Context):
 
     @property
     def llm(self):
-        raise AssertionError('Ordinary Add must not access a model')
+        raise AssertionError('Supplied-metadata Add must not access a model')
 
 
 class MultisurfaceAddTests(unittest.IsolatedAsyncioTestCase):
@@ -55,7 +55,7 @@ class MultisurfaceAddTests(unittest.IsolatedAsyncioTestCase):
     def deliver(self, *names):
         return self.db.append_message('current-session', 'assistant', '\n'.join('MEDIA:'+str(self.home/'workspaces'/name) for name in names))
 
-    async def command(self, text='add', **kwargs):
+    async def command(self, text='add Exact #Keep --description "Literal."', **kwargs):
         context = dict(platform='desktop', source=None, session_id='current-session', session_key='route-not-session') | kwargs
         result = invoke_plugin_command(self.ctx.commands['shelf'], text, **context)
         return await result if inspect.isawaitable(result) else result
@@ -79,14 +79,21 @@ class MultisurfaceAddTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hashlib.sha256((self.home/'state.db').read_bytes()).hexdigest(), before)
         self.assertIsNone(self.controller.application)
 
-    async def test_bare_browses_multiple_requires_saved_picker(self):
+    async def test_bare_browses_and_multi_add_requires_metadata_runtime_or_supplied_fields(self):
         self.deliver('one.md', 'two.md')
         self.assertIn('matching deliveries', await self.command(''))
-        text = await self.command()
-        self.assertIn('Nothing saved', text)
-        self.assertIn('Saved → Delivery Shelf', text)
+        text = await self.command('add')
+        self.assertIn('not saved', text)
+        self.assertIn('Agent runtime active', text)
+        self.assertIn('Manual saving is available', text)
         self.assertNotIn('--file', text)
         self.assertEqual(self.store.search()['total'], 0)
+        self.assertIn('Saved to Delivery Shelf: Exact', await self.command())
+        entries = self.store.search()['items']
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['files'], [
+            {'root': 'workspaces', 'path': 'one.md'},
+            {'root': 'workspaces', 'path': 'two.md'}])
 
     async def test_missing_context_unknown_surface_and_foreign_profile_no_queries(self):
         for kwargs in ({'session_id': ''}, {'session_id': '../bad'}, {'session_key': ''}, {'platform': 'unknown'}):
@@ -120,6 +127,40 @@ class MultisurfaceAddTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.api.Store, 'register_file_once', changed):
             self.assertIn('delivery changed', await self.command())
         self.assertEqual(self.store.search()['total'], 0)
+
+    async def test_pre_commit_lifecycle_failure_never_saves(self):
+        self.deliver('one.md')
+        original = self.api.Store.register_file_once
+        def closed(store, entry, **kwargs):
+            self.controller.close()
+            return original(store, entry, **kwargs)
+        with patch.object(self.api.Store, 'register_file_once', closed):
+            text = await self.command('add Exact #Keep --description "Literal."')
+        self.assertIn('not saved', text)
+        self.assertNotIn('Unable to confirm', text)
+        self.assertEqual(self.store.search()['total'], 0)
+
+    async def test_failure_after_final_authorization_is_ambiguous(self):
+        self.deliver('one.md')
+        def interrupted(store, entry, *, authorize_commit):
+            authorize_commit()
+            raise sqlite3.OperationalError('Interrupted after authorization')
+        with patch.object(self.api.Store, 'register_file_once', interrupted):
+            text = await self.command()
+        self.assertIn('Unable to confirm', text)
+        self.assertNotIn('not saved', text)
+        self.assertEqual(self.store.search()['total'], 0)
+
+    async def test_store_readback_failure_after_commit_is_ambiguous(self):
+        self.deliver('one.md')
+        with patch.object(self.api.Store, 'get', side_effect=ValueError('Readback changed')):
+            text = await self.command('add Exact #Keep --description "Literal."')
+        saved = self.store.search()['items']
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]['title'], 'Exact')
+        self.assertEqual(self.store.get(saved[0]['id']), saved[0])
+        self.assertIn('Unable to confirm', text)
+        self.assertNotIn('not saved', text)
 
     async def test_post_commit_failure_is_ambiguous_not_false_rollback(self):
         self.deliver('one.md')

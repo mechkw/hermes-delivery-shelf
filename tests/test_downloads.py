@@ -8,6 +8,18 @@ from hermes_cli.plugin_command_dispatch import invoke_plugin_command
 
 class DownloadTests(TelegramTests):
     # Reuse fixture helpers, not the inherited regression test cases.
+    def create_fixture_entry(self, entry):
+        """Source-path revocation cases require an actual original-file-link row."""
+        import time
+        import uuid
+        entry_id, now = uuid.uuid4().hex, time.time()
+        with self.store.connect() as conn:
+            conn.execute('INSERT INTO entries VALUES (?,?,?,?,?)',
+                         (entry_id, entry.model_dump_json(), now, now, 1))
+        item = self.store.get(entry_id)
+        self.assertEqual(item['versions'], [])
+        return item
+
     async def test_download_button_sends_exact_file_in_forum_without_inference(self):
         self.source.chat_id = '-100'
         self.ctx.inject_message = Mock(side_effect=AssertionError('No injection'))
@@ -123,7 +135,8 @@ class DownloadTests(TelegramTests):
             result = await self.command('search Fallback')
         self.assertIn('• Fallback result', result)
         self.assertNotIn('1. Fallback', result)
-        self.assertIn('Numbered downloads unavailable', result)
+        self.assertIn('native Telegram buttons and downloads are not bound', result)
+        self.assertIn('Nothing saved or sent', result)
         self.assertIn('Open /shelf', await self.command('dl 1'))
         self.assertFalse(self.capture.uploads)
 
@@ -374,14 +387,18 @@ class DownloadTests(TelegramTests):
         self.assertEqual(self.store.get(entry['id']), entry)
     async def test_recent_batch_is_bounded_and_reports_missing_attachments(self):
         api = plugin._service()
-        self.store.create(api.EntryInput(title='Reference only', description='/do/not/guess.zip'))
+        reference = self.store.create(api.EntryInput(title='Reference only', description='/do/not/guess.zip'))
         missing = self.store.create(api.EntryInput(title='Missing', file={'root':'workspaces','path':'new.md'}))
         (self.home/'workspaces/new.md').unlink()
-        result = await self.command('r3')
-        self.assertIn('1 sent; 1 unavailable', result)
-        self.assertIn('1 fewer attached', result)
+        version = missing['versions'][0]
+        (self.store.managed().directory/version['id']/version['files'][0]['id']).unlink()
+        selections = [(item['id'], item['revision']) for item in (missing, reference, self.entry)]
+        result = await self.controller.download(self.identity, selections)
+        self.assertEqual(result, 'Shelf · 1 sent; 2 unavailable.')
         self.assertEqual(len(self.capture.uploads), 1)
-        self.assertIn('1–5', await self.command('r6'))
+        self.assertIn('r1 through /shelf r5', await self.command('r6'))
+        self.assertEqual(await self.command('r3'), 'Shelf · File sent.')
+        self.assertEqual(self.capture.uploads[-1][2]['document'][1], b'Fictional output')
         self.assertEqual(self.store.get(missing['id']), missing)
     async def test_numbered_selection_expiry_is_rechecked_after_file_read(self):
         await self.command('search Fictional')
@@ -510,7 +527,7 @@ class DownloadTests(TelegramTests):
         self.assertEqual(len(self.capture.uploads), 1)
         self.capture.do_request = original
         self.capture.fail.add('sendDocument')
-        self.assertIn('unconfirmed', await self.command('r3'))
+        self.assertIn('unconfirmed', await self.command('r1'))
         self.assertEqual(sum(v == 'sendDocument' for v, d in self.capture.calls), 2)
         self.capture.fail.clear()
         self.assertIn('sent', await self.command('dl 1'))  # lock cleaned on error
@@ -590,8 +607,12 @@ class DownloadTests(TelegramTests):
         (self.home/'workspaces/old.md').unlink()
         token = await self.panel()
         await self.click(token, '1')
+        # Legacy source availability is deliberately checked at send time.
+        send = next(row[0]['callback_data'] for row in self.edited()[-1]['reply_markup']['inline_keyboard']
+                    if row[0]['text'] == 'Send file')
+        await self.click(token, data=send)
         self.assertIn('File unavailable', self.edited()[-1]['text'])
-        self.assertNotIn('Send file', str(self.edited()[-1]['reply_markup']))
+        self.assertFalse(self.capture.uploads)
         self.store.create(plugin._service().EntryInput(title='Reference', description='An unattached bundle'))
         token = await self.panel()
         await self.click(token, '1')
@@ -599,16 +620,21 @@ class DownloadTests(TelegramTests):
         self.assertNotIn('Send file', str(self.edited()[-1]['reply_markup']))
 
     async def test_r5_payload_cap_and_partial_post_receipt(self):
+        items = []
         for i in range(6):
-            self.store.create(plugin._service().EntryInput(title=f'Batch {i}',
-                file={'root':'workspaces','path':'old.md'}))
-        result = await self.command('r5')
+            items.append(self.store.create(plugin._service().EntryInput(title=f'Batch {i}',
+                file={'root':'workspaces','path':'old.md'})))
+        selections = [(item['id'],item['revision']) for item in items]
+        result = await self.controller.download(self.identity, selections)
         self.assertEqual(result, 'Shelf · 5 sent; 0 unavailable.')
         self.assertEqual(len(self.capture.uploads), 5)
         self.capture.fail.add('sendDocument')
-        result = await self.command('r5')
-        self.assertIn('0 sent; 0 unavailable; 4 not attempted', result)
+        result = await self.controller.download(self.identity, selections)
+        self.assertIn('0 sent; 0 unavailable; 5 not attempted', result)
         self.assertEqual(sum(v == 'sendDocument' for v,d in self.capture.calls), 6)
+        self.capture.fail.clear()
+        self.assertEqual(await self.command('r5'), 'Shelf · File sent.')
+        self.assertEqual(len(self.capture.uploads), 6)
 
     async def test_changed_during_bounded_read_is_rejected(self):
         await self.command('search Fictional')

@@ -40,6 +40,12 @@ async def main():
             payload = b'PK\x03\x04fictional opaque ZIP bytes\x00\xff'
             (home/'workspaces/bundle.zip').write_bytes(payload)
             store = api.Store(home)
+            ranked = []
+            for name, content in (('oldest.zip', b'PK\x03\x04oldest preserved bytes'),
+                                  ('middle.zip', b'PK\x03\x04middle preserved bytes')):
+                (home/'workspaces'/name).write_bytes(content)
+                ranked.append(store.create(api.EntryInput(title=name,
+                    file={'root':'workspaces','path':name})))
             saved = store.create(api.EntryInput(title='Native archive', description='Fixture', tags=['Native'],
                 file={'root':'workspaces','path':'bundle.zip'}))
             baseline = store.search()
@@ -79,12 +85,17 @@ async def main():
                 assert '1. Native archive' in [d for v,d in capture.calls if v=='sendMessage'][-1]['text']
                 assert 'sent' in await command('dl 1')
                 assert 'sent' in await command('download 1')
-                assert '2 fewer attached' in await command('r3')
-                assert len(capture.uploads)==4
-                for verb, data, files in capture.uploads:
+                # r3 retrieves one saved delivery, even without its original.
+                (home/'workspaces/bundle.zip').write_bytes(b'Changed original, never send these bytes')
+                (home/'workspaces/oldest.zip').unlink()
+                assert await command('r3')=='Shelf · File sent.'
+                assert await command('r1')=='Shelf · File sent.'
+                assert len(capture.uploads)==5
+                for index, (verb, data, files) in enumerate(capture.uploads):
                     assert verb=='sendDocument' and data['chat_id']==-100 and data['message_thread_id']==9
                     assert data['disable_content_type_detection'] is True
-                    assert files['document'][0]=='bundle.zip' and files['document'][1]==payload
+                    expected = ('oldest.zip', b'PK\x03\x04oldest preserved bytes') if index == 3 else ('bundle.zip', payload)
+                    assert files['document'][:2]==expected
                 # Reproduce P1A through the official dispatcher and PTB transport:
                 # old number 1 was acknowledged; the newer list is rejected.
                 assert await command('search Native') is None
@@ -96,7 +107,7 @@ async def main():
                 assert 'unconfirmed' in await command('')
                 capture.fail.clear()
                 assert 'Open /shelf' in await command('dl 1')
-                assert len(capture.uploads)==4
+                assert len(capture.uploads)==5
                 # P1B: no captured-profile query or title/count disclosure.
                 foreign = home/'profiles/foreign'
                 foreign.mkdir(parents=True)
@@ -110,12 +121,13 @@ async def main():
                     reset_hermes_home_override(foreign_token)
                 reject.assert_not_called()
             assert store.search()==baseline and store.get(saved['id'])==saved
+            assert all(store.get(item['id'])==item for item in ranked)
             assert hashlib.sha256(sentinel.read_bytes()).hexdigest()==before
             assert not (home/'state.db').exists()
             assert not (home/'plugin-data/conversation-bookmarks').exists()
             print(json.dumps({'result':'PASS','native_loader':True,'gateway_dispatcher':True,
                 'ptb_forum_uploads':len(capture.uploads),'exact_bytes':True,'inference_calls':reject.call_count,
-                'commands':['/shelf','Send file','/shelf search Native','/shelf dl 1','/shelf download 1','/shelf r3'],
+                'commands':['/shelf','Send file','/shelf search Native','/shelf dl 1','/shelf download 1','/shelf r3','/shelf r1'],
                 'metadata_unchanged':True,'history_bookmarks_unchanged':True,'live_telegram':False}))
         finally:
             manager.unload()

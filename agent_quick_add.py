@@ -26,7 +26,7 @@ def exact_entry(store, ref):
     return store.get(row['id']) if row else None
 
 
-def save(controller, identity, raw, authorize, loop):
+def save(controller, identity, raw, authorize, loop, *, on_commit_authorized):
     api, home = controller.api, controller.home
     count, supplied = parse_add(raw)
     authorize()
@@ -96,6 +96,7 @@ def save(controller, identity, raw, authorize, loop):
             if api.file_stamp(home, api.FileRef.model_validate(ref)) != stamp:
                 raise ValueError('File changed before save. Nothing saved.')
         authorize()
+        on_commit_authorized()
     item, existing = store.register_file_once(entry, authorize_commit=commit)
     authorize()
     if store.get(item['id']) != item:

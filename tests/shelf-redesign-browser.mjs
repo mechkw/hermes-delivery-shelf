@@ -1,6 +1,8 @@
 import {expect} from '@playwright/test';
 import {join} from 'node:path';
+import {nativeRedesignCases,nativeGenerationFenceCase} from './native-shelf-browser.mjs';
 export async function shelfRedesignCases(page,adapter,api,proof){
+ if(adapter==='desktop')return nativeRedesignCases(page,api,proof);
  const id='delivery-shelf';
  await page.getByRole('tab',{name:'Deliverables',exact:true}).click();
  await page.getByRole('button',{name:'Add delivery',exact:true}).click();
@@ -108,6 +110,7 @@ export async function shelfGenerationFenceCases(page,adapter,base){
  for(const change of ['profile',...(adapter==='desktop'?['connection']:[]),'dispose']){
   await page.goto(base+'/qa/'+adapter);await expect(page.getByRole('tab')).toHaveCount(2);await page.getByRole('tab',{name:'Deliverables',exact:true}).click();await page.getByRole('button',{name:'Add delivery',exact:true}).click();
   const dialog=page.getByRole('dialog');
+  if(adapter==='desktop'){await nativeGenerationFenceCase(page,change,pattern);console.log('PASS Shelf generation lifetime fence',adapter,change);continue;}
   const choose=async(label,name)=>{await dialog.getByRole('combobox',{name:label,exact:true}).click();await page.getByRole('option',{name,exact:false}).click();};
   await dialog.getByLabel('Search conversations',{exact:true}).fill('Meadow');await page.waitForTimeout(250);await choose('Choose a conversation','Meadow deliverables');await page.waitForTimeout(250);await choose('Choose a file','meadow.md');
   let release,entered;const hold=new Promise(r=>release=r),seen=new Promise(r=>entered=r);

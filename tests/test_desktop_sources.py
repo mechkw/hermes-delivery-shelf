@@ -81,7 +81,7 @@ class DesktopSources(unittest.TestCase):
         entry=saved.json()
         self.assertEqual(self.client.get('/entries/'+entry['id']).json(),entry)
         self.db.delete_session('fictional')
-        edited=self.client.put('/entries/'+entry['id'],json={k:v for k,v in entry.items() if k not in ('id','source','created','updated')}|{'title':'Kept after pruning'})
+        edited=self.client.put('/entries/'+entry['id'],json={k:v for k,v in entry.items() if k in api.EntryUpdate.model_fields and k != 'source'}|{'title':'Kept after pruning'})
         self.assertEqual(edited.status_code,200,edited.text)
         self.assertEqual(edited.json()['source'],selected['source'])
 

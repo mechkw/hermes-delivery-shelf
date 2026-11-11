@@ -1,6 +1,6 @@
 """P2 review regressions: real PTB/SQLite, fictional homes, no network/model."""
 import asyncio
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, closing, contextmanager
 import json
 import sqlite3
 import threading
@@ -82,7 +82,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Saved', result)
         self.assertEqual(t.store.search(q='GroupCase')['total'], 1)
         with t.session(chat_id='-100', session_id=entry.session_id, session_key=entry.session_key):
-            offered = json.loads(await asyncio.to_thread(t.ctx.tools['delivery_shelf_offer_update'],
+            offered = json.loads(await asyncio.to_thread(t.controller.offer,
                 {'id':t.entry['id'], 'file':{'root':'workspaces','path':'new.md'}}))
         self.assertEqual(offered['status'], 'offered')
         await t.click(next(reversed(t.controller.panels)), chat=-100)
@@ -117,7 +117,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sqlite_contention_heartbeat_and_double_click(self):
         t = self.t
-        await t.offer()
+        await t.native_offer()
         token = next(reversed(t.controller.panels))
         async with self.sqlite_wait() as entered:
             action = asyncio.create_task(t.click(token))
@@ -141,7 +141,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 await self.asyncSetUp()
             t = self.t
             with self.subTest(boundary=boundary):
-                await t.offer()
+                await t.native_offer()
                 token = next(reversed(t.controller.panels))
                 async with self.sqlite_wait() as entered:
                     action = asyncio.create_task(t.click(token))
@@ -214,7 +214,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancelled_waiting_callback_cannot_commit(self):
         t = self.t
-        await t.offer()
+        await t.native_offer()
         token = next(reversed(t.controller.panels))
         finished = threading.Event()
         perform = t.controller._perform
@@ -241,6 +241,109 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             results = await asyncio.gather(*(asyncio.to_thread(t.ctx.tools['delivery_shelf_register'], args) for _ in range(2)))
         self.assertEqual(sum(json.loads(result)['ok'] for result in results), 1)
         self.assertEqual(t.store.search(q='Concurrent')['total'], 1)
+
+    async def test_registered_version_response_revalidates_derivative_and_provenance(self):
+        for boundary in ('missing', 'roots', 'bytes', 'provenance'):
+            if boundary != 'missing':
+                await self.asyncTearDown()
+                await self.asyncSetUp()
+            t = self.t
+            with self.subTest(boundary=boundary), t.delivered_version() as db:
+                target = t.home/'workspaces/new.md'
+                target.write_text('A concrete new version')
+                args = {'id':t.entry['id'], 'file':{'root':'workspaces','path':'new.md'}}
+                offered = await t.version_tool('delivery_shelf_offer_update', args)
+                self.assertEqual(offered['status'], 'offered', offered)
+                if boundary == 'missing': target.unlink()
+                elif boundary == 'roots': (t.policy.parent/'allowed-roots.json').write_text('{}')
+                elif boundary == 'bytes': target.write_text('Changed after the concrete offer')
+                else:
+                    with closing(sqlite3.connect(t.home/'state.db')) as conn, conn:
+                        conn.execute("UPDATE messages SET content='Delivery withdrawn' WHERE session_id=?",
+                                     ('fictional-session',))
+                result = await t.version_tool('delivery_shelf_respond_update',
+                    {'offer_id':offered['offer_id'], 'decision':'always'})
+                self.assertFalse(result['ok'], result)
+                self.assertEqual(t.store.get(t.entry['id']), t.entry)
+                with t.controller.awareness.connect() as conn:
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM version_permissions').fetchone()[0], 0)
+                self.assertEqual(t.sent(), [])
+
+    async def test_registered_version_tools_fence_session_and_lifecycle_changes(self):
+        for boundary in ('reset', 'delete', 'unload', 'reconnect', 'reload', 'reset-unpinned', 'capacity'):
+            if boundary != 'reset':
+                await self.asyncTearDown()
+                await self.asyncSetUp()
+            t = self.t
+            with self.subTest(boundary=boundary), t.delivered_version() as db:
+                (t.home/'workspaces/new.md').write_text('A concrete new version')
+                args = {'id':t.entry['id'], 'file':{'root':'workspaces','path':'new.md'}}
+                offered = await t.version_tool('delivery_shelf_offer_update', args)
+                self.assertEqual(offered['status'], 'offered', offered)
+                if boundary == 'reset':
+                    t.ctx.hooks['on_session_reset'](old_session_id='fictional-session', session_id='fresh')
+                elif boundary == 'delete': t.ctx.hooks['on_session_delete'](session_id='fictional-session')
+                elif boundary == 'unload': t.ctx.cleanup()
+                elif boundary == 'reconnect': t.ctx.factory(t.app, object())
+                elif boundary == 'reload':
+                    t.ctx.cleanup()
+                    t.ctx = fixture.Context()
+                    fixture.plugin.register(t.ctx)
+                    t.controller = t.ctx.factory.__self__
+                    t.ctx.factory(t.app, object())
+                elif boundary == 'reset-unpinned': t.ctx.hooks['on_session_reset'](session_id='fictional-session')
+                else:
+                    for i in range(130):
+                        t.ctx.hooks['on_session_reset'](old_session_id=f'old-{i}', session_id=f'new-{i}')
+                response = {'offer_id':offered['offer_id'], 'decision':'always'}
+                result = await t.version_tool('delivery_shelf_respond_update', response)
+                self.assertFalse(result['ok'], result)
+                fresh_offer = await t.version_tool('delivery_shelf_offer_update', args)
+                if boundary in ('reconnect', 'reload', 'reset-unpinned'):
+                    self.assertEqual(fresh_offer['status'], 'offered', fresh_offer)
+                    self.assertIn('another session or lifecycle', result['error'])
+                else:
+                    self.assertFalse(fresh_offer['ok'], fresh_offer)
+                if boundary == 'reset':
+                    db.create_session('fresh', source='telegram')
+                    db.append_message('fresh', 'assistant', 'MEDIA:'+str(t.home/'workspaces/new.md'))
+                    fresh_offer = await t.version_tool('delivery_shelf_offer_update', args, session_id='fresh')
+                    self.assertEqual(fresh_offer['status'], 'offered', fresh_offer)
+                    result = await t.version_tool('delivery_shelf_respond_update', response, session_id='fresh')
+                    self.assertFalse(result['ok'], result)
+                self.assertEqual(t.store.get(t.entry['id']), t.entry)
+                with t.controller.awareness.connect() as conn:
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM version_permissions').fetchone()[0], 0)
+                self.assertEqual(t.sent(), [])
+
+    async def test_waiting_registered_version_response_rechecks_commit_authority(self):
+        for boundary in ('reset', 'unload', 'owners', 'roots', 'reconnect'):
+            if boundary != 'reset':
+                await self.asyncTearDown()
+                await self.asyncSetUp()
+            t = self.t
+            with self.subTest(boundary=boundary), t.delivered_version():
+                (t.home/'workspaces/new.md').write_text('A concrete new version')
+                offered = await t.version_tool('delivery_shelf_offer_update',
+                    {'id':t.entry['id'], 'file':{'root':'workspaces','path':'new.md'}})
+                self.assertEqual(offered['status'], 'offered', offered)
+                async with self.sqlite_wait() as entered:
+                    action = asyncio.create_task(t.version_tool('delivery_shelf_respond_update',
+                        {'offer_id':offered['offer_id'], 'decision':'always'}))
+                    await self.waiting(entered)
+                    if boundary == 'reset':
+                        t.ctx.hooks['on_session_reset'](old_session_id='fictional-session', session_id='fresh')
+                    elif boundary == 'unload': t.ctx.cleanup()
+                    elif boundary == 'owners': t.policy.write_text('[]')
+                    elif boundary == 'roots': (t.policy.parent/'allowed-roots.json').write_text('{}')
+                    else: t.ctx.factory(t.app, object())
+                    self.assertFalse(action.done())
+                result = await action
+                self.assertFalse(result['ok'], result)
+                self.assertEqual(t.store.get(t.entry['id']), t.entry)
+                with t.controller.awareness.connect() as conn:
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM version_permissions').fetchone()[0], 0)
+                self.assertEqual(t.sent(), [])
 
 
 if __name__ == '__main__': unittest.main()

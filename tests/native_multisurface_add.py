@@ -30,6 +30,9 @@ from gateway.session import SessionSource
 from tools.registry import registry
 
 
+SUPPLIED_ADD = 'add Exact #Keep --description "Literal."'
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='shelf-native-command-', dir=os.environ.get('TMPDIR')) as directory:
         home = Path(directory)/'home'
@@ -56,6 +59,7 @@ def main():
                 db = SessionDB(home/'state.db')
                 for surface in ('desktop', 'tui', 'cli', 'api_server', 'telegram'):
                     db.create_session('native-'+surface, source=surface)
+                    db.append_message('native-'+surface, 'user', 'Create a fictional deliverable.')
                     db.append_message('native-'+surface, 'assistant', 'MEDIA:'+str(home/'workspaces/first.md'))
                 before = hashlib.sha256((home/'state.db').read_bytes()).hexdigest()
                 from tui_gateway import server
@@ -65,7 +69,7 @@ def main():
                 guards.enter_context(patch.object(server, '_sessions', sessions))
                 guards.enter_context(patch('hermes_cli.plugins.get_plugin_command_handler', side_effect=lambda name: handler if name=='shelf' else None))
                 for surface in ('desktop', 'tui'):
-                    result = server._methods['command.dispatch']('test', {'name': 'shelf', 'arg': 'add', 'session_id': surface})
+                    result = server._methods['command.dispatch']('test', {'name': 'shelf', 'arg': SUPPLIED_ADD, 'session_id': surface})
                     print(surface, result)
                     output = result.get('result', {}).get('output', '')
                     assert 'agent handoff is unavailable or disabled' not in output, output
@@ -76,7 +80,7 @@ def main():
                 from hermes_cli import gateway_plugin_commands
                 shell: Any = SimpleNamespace(session_id='native-cli', _clarify_callback=lambda *a: (_ for _ in ()).throw(AssertionError('No clarify')))
                 with patch.object(gateway_plugin_commands, 'run', return_value=None), patch('cli._cprint') as output:
-                    HermesCLI._run_plugin_slash_command(shell, '/shelf', 'add')
+                    HermesCLI._run_plugin_slash_command(shell, '/shelf', SUPPLIED_ADD)
                     assert 'Already saved' in output.call_args.args[0]
                 runner = ForumRunner()
                 runner.profile = controller.profile
@@ -85,13 +89,16 @@ def main():
                     source = SessionSource(platform=native_platform, chat_id='17', user_id='17', chat_type='dm', profile=controller.profile)
                     session = SimpleNamespace(session_id='native-'+surface, session_key='route-'+surface, created_at=now, updated_at=now)
                     with patch.object(controller, 'identity', wraps=controller.identity) as identity:
-                        result = asyncio.run(runner._hm_run_plugin_handler(handler, cast(Any, None), source, session_entry=session, args='add'))
-                        assert isinstance(result, str) and 'Already saved' in result, result
+                        result = asyncio.run(runner._hm_run_plugin_handler(handler, cast(Any, None), source, session_entry=session, args=SUPPLIED_ADD))
+                        if surface == 'telegram':
+                            assert isinstance(result, str) and 'native Telegram buttons and downloads are not bound' in result and 'Nothing saved or sent' in result, result
+                        else:
+                            assert isinstance(result, str) and 'Already saved' in result, result
                         assert identity.call_args.args == (source, session.session_id, session.session_key, surface)
                     # Owner refusal still applies to Telegram without a PTB factory.
                     if surface=='telegram':
                         source.user_id='18'
-                        result = asyncio.run(runner._hm_run_plugin_handler(handler, cast(Any, None), source, session_entry=session, args='add'))
+                        result = asyncio.run(runner._hm_run_plugin_handler(handler, cast(Any, None), source, session_entry=session, args=SUPPLIED_ADD))
                         assert isinstance(result, str) and 'not saved' in result and 'owner policy' in result, result
                 injection.assert_not_called()
                 llm.assert_not_called()
@@ -128,15 +135,28 @@ def main():
                     'profile_home': str(home), 'source': 'desktop', 'cwd': str(home/'workspaces')}}
                 with patch.object(server, '_sessions', sessions), \
                         patch('hermes_cli.plugins.get_plugin_command_handler', side_effect=lambda name: handler if name=='shelf' else None):
-                    result = server._methods['command.dispatch']('test', {'name': 'shelf', 'arg': 'add', 'session_id': 'isolated-ui'})
-                    assert 'Saved to Delivery Shelf: second.md' in result.get('result', {}).get('output', ''), result
+                    result = server._methods['command.dispatch']('test', {'name': 'shelf', 'arg': SUPPLIED_ADD, 'session_id': 'isolated-ui'})
+                    output = result.get('result', {}).get('output', '')
+                    assert 'not saved' in output and 'isolated plugin host' in output and 'cancellation' in output, result
                 search_entry = registry.get_entry('delivery_shelf_search', scope=manager.scope_key)
                 assert search_entry is not None
+                assert json.loads(search_entry.handler({}))['data']['items'] == []
+                # Quick Add must fail closed, but explicit manual Save still works
+                # through the same real isolated host's native ASGI forwarding.
+                payload = dict(title='Manual second', description='Literal.', tags=['Keep'],
+                    session_id='isolated-session', file={'root':'workspaces', 'path':'second.md'})
+                host = manager._plugin_host()
+                reply = host.asgi_request('delivery-shelf', str(home/'plugins/delivery-shelf/dashboard'),
+                    'plugin_api.py', 'POST', '/entries', '', [('content-type','application/json')],
+                    json.dumps(payload).encode(), authenticated=True)
+                assert reply['status'] == 201, reply
+                saved = json.loads(reply['body'])
                 items = json.loads(search_entry.handler({}))['data']['items']
+                assert items == [saved], items
                 assert len(items)==1 and items[0]['session_id']=='isolated-session' and items[0]['file']['path']=='second.md', items
                 injection.assert_not_called()
                 llm.assert_not_called()
-                print('PASS real isolated plugin-host child + native Desktop RPC, exact session forwarding, no PTB/injection/LLM')
+                print('PASS real isolated plugin-host child + native Desktop RPC refusal; manual Save/readback; no PTB/injection/LLM')
         finally:
             db.close()
             manager.unload()

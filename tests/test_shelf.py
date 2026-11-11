@@ -55,6 +55,19 @@ class ShelfTests(unittest.TestCase):
     def create(self, **values):
         return self.store.create(api.EntryInput(title="A report", **values))
 
+    def legacy(self, **values):
+        """A genuine pre-managed-copy row, so source-policy checks remain exercised."""
+        import time
+        import uuid
+        entry = api.EntryInput(title='Legacy report', **values)
+        entry_id, now = uuid.uuid4().hex, time.time()
+        with self.store.connect() as conn:
+            conn.execute('INSERT INTO entries VALUES (?,?,?,?,?)',
+                         (entry_id, entry.model_dump_json(), now, now, 1))
+        item = self.store.get(entry_id)
+        self.assertEqual(item['versions'], [])
+        return item
+
     def file(self, name="report.md", content=b"# Finished work\n<script>alert(1)</script>"):
         path = self.workspace / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,13 +79,13 @@ class ShelfTests(unittest.TestCase):
         with patch('zipfile.ZipFile', side_effect=AssertionError('No extraction')):
             item = self.create(file=self.file('bundle.zip', content))
             status = self.client.get(self.base + '/status').json()
-            self.assertEqual(status['file_types'], ['.csv', '.gif', '.jpeg', '.jpg', '.md', '.pdf', '.png', '.txt', '.webp', '.zip'])
+            self.assertEqual(status['file_types'], ['.csv', '.docx', '.gif', '.jpeg', '.jpg', '.md', '.pdf', '.png', '.pptx', '.txt', '.webp', '.xlsx', '.zip'])
             self.assertEqual(status['max_file_bytes'], 10485760)
             route = self.base + '/entries/' + item['id'] + '/file'
             result = self.client.get(route)
             self.assertEqual(result.status_code, 200)
             self.assertEqual(base64.b64decode(result.json()['base64']), content)
-            self.assertEqual(result.json()['media_type'], 'application/octet-stream')
+            self.assertEqual(result.json()['media_type'], 'application/zip')
             self.assertEqual(self.client.get(route + '?preview=true').status_code, 415)
 
     def test_api_preserves_tag_case_and_filters_old_and_new_spellings(self):
@@ -84,7 +97,7 @@ class ShelfTests(unittest.TestCase):
             response = client.post('/entries', json=payload)
             self.assertEqual(response.status_code, 201, response.text)
             item = response.json()
-            expected = ['Keep-Tag', 'Équipe', 'Straße', 'Design, Decisions', "100%_' OR 1=1 --"]
+            expected = payload['tags']
             self.assertEqual(item['title'], 'OpsCase')
             self.assertEqual(item['tags'], expected)
             path = '/entries/' + item['id']
@@ -105,7 +118,7 @@ class ShelfTests(unittest.TestCase):
             updated = client.put(path, json={**payload, 'revision': item['revision'],
                                             'tags': [' NEW-Tag ', 'new-tag', 'ÉQUIPE', 'équipe']})
             self.assertEqual(updated.status_code, 200, updated.text)
-            self.assertEqual(updated.json()['tags'], ['NEW-Tag', 'ÉQUIPE'])
+            self.assertEqual(updated.json()['tags'], [' NEW-Tag ', 'new-tag', 'ÉQUIPE', 'équipe'])
             self.assertEqual(client.get(path).json(), updated.json())
             self.assertEqual(client.get('/entries', params={'tag': 'new-TAG'}).json()['items'],
                              [updated.json()])
@@ -114,8 +127,8 @@ class ShelfTests(unittest.TestCase):
     def test_crud_readback_revision_and_metadata_only_delete(self):
         ref = self.file()
         created = self.create(file=ref, tags=["Done", "done"], project="North")
-        self.assertEqual(created["tags"], ["Done"])
-        edit = api.EntryUpdate.model_validate({**{k:v for k,v in created.items() if k not in ("id","created","updated")}, "title":"Changed"})
+        self.assertEqual(created["tags"], ["Done", "done"])
+        edit = api.EntryUpdate.model_validate({**{k:v for k,v in created.items() if k in api.EntryUpdate.model_fields}, "title":"Changed"})
         updated = self.store.update(created["id"], edit)
         self.assertEqual(updated["revision"], 2)
         self.assertEqual(self.store.get(created["id"])["title"], "Changed")
@@ -144,7 +157,13 @@ class ShelfTests(unittest.TestCase):
             self.assertEqual(self.client.post(self.base+"/entries",json=payload).status_code,422)
         self.assertEqual(self.client.get(self.base+"/entries?limit=1000").status_code,422)
         self.assertEqual(self.client.delete(self.base+"/entries/"+item["id"]+"?revision=1").status_code,200)
-        self.assertEqual(self.client.get(self.base+"/entries/"+item["id"]).status_code,404)
+        trashed = self.client.get(self.base+"/entries/"+item["id"])
+        self.assertEqual(trashed.status_code, 200)
+        self.assertEqual(trashed.json()['state'], 'trash')
+        self.assertEqual(trashed.json()['revision'], 2)
+        self.assertEqual(self.store.search()['total'], 0)
+        self.assertEqual(self.store.search(state='trash')['total'], 1)
+        self.assertEqual(self.client.delete(self.base+'/entries/'+item['id']+'?revision=1').status_code, 409)
 
     def test_revision_bounds_and_strict_types(self):
         item = self.client.post(self.base + '/entries', json={'title': 'Bounds'}).json()
@@ -168,7 +187,12 @@ class ShelfTests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()['revision'], 2)
         self.assertEqual(self.client.delete(url, params={'revision': 2}).status_code, 200)
-        self.assertEqual(self.client.get(url).status_code, 404)
+        trashed = self.client.get(url)
+        self.assertEqual(trashed.status_code, 200)
+        self.assertEqual(trashed.json()['state'], 'trash')
+        self.assertEqual(trashed.json()['revision'], 3)
+        self.assertEqual(self.client.delete(url, params={'revision': 2}).status_code, 409)
+        self.assertEqual(self.store.search()['total'], 0)
 
     def test_profile_hint_refused(self):
         self.assertEqual(self.client.get(self.base+"/status?profile=other").status_code,409)
@@ -229,7 +253,7 @@ class ShelfTests(unittest.TestCase):
 
     def test_policy_invalid_missing_alias_empty_and_revocation(self):
         ref=self.file()
-        entry=self.create(file=ref)
+        entry=self.legacy(file=ref)
         policy=api.data_dir(self.home)/"allowed-roots.json"
         policy.write_text("{}")
         self.assertEqual(self.client.get(self.base+f"/entries/{entry['id']}/file").status_code,403)
@@ -240,7 +264,7 @@ class ShelfTests(unittest.TestCase):
 
     def test_present_invalid_policy_never_falls_back_to_defaults(self):
         ref = self.file()
-        entry = self.create(file=ref)
+        entry = self.legacy(file=ref)
         policy = api.data_dir(self.home) / "allowed-roots.json"
         download = self.base + f"/entries/{entry['id']}/file"
         payload = {"title": "New delivery", "file": ref.model_dump()}
@@ -275,17 +299,23 @@ class ShelfTests(unittest.TestCase):
         self.assertEqual(response.headers['cache-control'],'no-store')
         response=self.client.get(path)
         self.assertEqual(base64.b64decode(response.json()['base64']),(self.workspace/'report.md').read_bytes())
-        self.assertEqual(response.json()['media_type'],'application/octet-stream')
+        self.assertEqual(response.json()['media_type'],'text/markdown')
+        self.assertEqual(response.headers['x-content-type-options'], 'nosniff')
         image=self.create(file=self.file('image.png',b'fictional fixture'))
         self.assertEqual(self.client.get(self.base+f"/entries/{image['id']}/file?preview=true").status_code,415)
 
     def test_preview_truncation_and_file_size_limit(self):
-        entry=self.create(file=self.file(content=b'x'*70000))
+        ref = self.file(content=b'x'*70000)
+        entry=self.legacy(file=ref)
+        managed = self.create(file=ref)
         preview=self.client.get(self.base+f"/entries/{entry['id']}/file?preview=true").json()
         self.assertEqual(len(preview['text']),65536)
         self.assertTrue(preview['truncated'])
         with (self.workspace/'report.md').open('wb') as stream: stream.truncate(api.MAX_FILE+1)
         self.assertEqual(self.client.get(self.base+f"/entries/{entry['id']}/file").status_code,413)
+        result = self.client.get(self.base+f"/entries/{managed['id']}/file")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(base64.b64decode(result.json()['base64']), b'x'*70000)
 
     def test_deleted_file_metadata_still_editable(self):
         entry=self.create(file=self.file())
@@ -299,7 +329,7 @@ class ShelfTests(unittest.TestCase):
             def register_tool(self,**kwargs):self.tools[kwargs['name']]=kwargs
             def register_command(self,name,handler,**kwargs):self.commands[name]=(handler,kwargs)
         ctx=Context();plugin.register(ctx)
-        self.assertEqual(set(ctx.tools),{'delivery_shelf_register','delivery_shelf_search','delivery_shelf_update','delivery_shelf_offer_update'})
+        self.assertEqual(set(ctx.tools),{'delivery_shelf_register','delivery_shelf_search','delivery_shelf_update','delivery_shelf_offer_update','delivery_shelf_respond_update'})
         self.assertEqual(ctx.commands['shelf'][1]['argument_mode'],'text')
         result=json.loads(ctx.tools['delivery_shelf_register']['handler']({'title':'Tool delivery'}))
         self.assertTrue(result['ok'])
