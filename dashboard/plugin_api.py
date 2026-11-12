@@ -17,6 +17,7 @@ from typing import Literal
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 PLUGIN_ID = "delivery-shelf"
@@ -515,29 +516,67 @@ def request_store(profile: str | None = Query(default=None)):
     return Store(home)
 
 
-router = APIRouter()
+_route_pool = None
+_route_pool_lock = __import__('threading').Lock()
+
+
+def route_pool():
+    global _route_pool
+    with _route_pool_lock:
+        if _route_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _route_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='delivery-shelf')
+        return _route_pool
+
+
+def offloaded(call):
+    """Run a blocking handler or dependency on this plugin's own small worker pool.
+
+    The host runs plain ``def`` routes on one shared pool. When its own slow reads
+    (cross-profile session lists) fill that pool, every plugin route queues behind
+    them until the client gives up and Saved reports the shelf as unreachable.
+    """
+    import asyncio, contextvars, functools, inspect
+    if inspect.iscoroutinefunction(call):
+        return call
+    @functools.wraps(call)
+    async def run(*args, **kwargs):
+        context = contextvars.copy_context()
+        return await asyncio.get_running_loop().run_in_executor(
+            route_pool(), functools.partial(context.run, call, *args, **kwargs))
+    return run
+
+
+class OwnPoolRoute(APIRoute):
+    def __init__(self, path, endpoint, **kwargs):
+        super().__init__(path, offloaded(endpoint), **kwargs)
+
+
+# Routes depend on these; the module-level names stay plain callables.
+store_dependency = offloaded(request_store)
+router = APIRouter(route_class=OwnPoolRoute)
 
 
 @router.get("/status")
-def status(response: Response, store: Store = Depends(request_store)):
+def status(response: Response, store: Store = Depends(store_dependency)):
     response.headers["Cache-Control"] = "no-store"
     return {"version": VERSION, "profile": profile_name(store.home), "roots": list(allowed_roots(store.home)), "file_types": sorted(FILE_TYPES), "max_file_bytes": MAX_FILE}
 
 
 @router.get("/entries")
-def entries(response: Response, q: str = Query("", max_length=200), tag: str = Query("", max_length=40), kind: str = Query("", max_length=40), project: str = Query("", max_length=100), limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=1000000), state: Literal['active', 'archived', 'trash', 'pending_delete', 'all'] = 'active', store: Store = Depends(request_store)):
+def entries(response: Response, q: str = Query("", max_length=200), tag: str = Query("", max_length=40), kind: str = Query("", max_length=40), project: str = Query("", max_length=100), limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=1000000), state: Literal['active', 'archived', 'trash', 'pending_delete', 'all'] = 'active', store: Store = Depends(store_dependency)):
     response.headers["Cache-Control"] = "no-store"
     return store.search(q, tag, kind, project, limit, offset, state)
 
 
 @router.get('/settings')
-def settings(response: Response, store: Store = Depends(request_store)):
+def settings(response: Response, store: Store = Depends(store_dependency)):
     response.headers['Cache-Control'] = 'no-store'
     return store.settings()
 
 
 @router.put('/settings')
-def save_settings(payload: dict, store: Store = Depends(request_store)):
+def save_settings(payload: dict, store: Store = Depends(store_dependency)):
     try:
         return store.save_settings(payload)
     except ValidationError as exc:
@@ -545,12 +584,12 @@ def save_settings(payload: dict, store: Store = Depends(request_store)):
 
 
 @router.post('/cleanup')
-def cleanup(store: Store = Depends(request_store)):
+def cleanup(store: Store = Depends(store_dependency)):
     return store.cleanup_due(force=True)
 
 
 @router.get('/storage')
-def storage(response: Response, store: Store = Depends(request_store)):
+def storage(response: Response, store: Store = Depends(store_dependency)):
     response.headers['Cache-Control'] = 'no-store'
     return store.storage()
 
@@ -559,46 +598,46 @@ BulkAction = source_module('lifecycle').BulkAction
 
 
 @router.post('/entries/bulk-action')
-def bulk_action(request: BulkAction, store: Store = Depends(request_store)):
+def bulk_action(request: BulkAction, store: Store = Depends(store_dependency)):
     return store.bulk_action(request)
 
 
 @router.post("/entries", status_code=201)
-def create(entry: EntryInput, store: Store = Depends(request_store)):
+def create(entry: EntryInput, store: Store = Depends(store_dependency)):
     return store.create(entry)
 
 
 @router.get("/entries/{entry_id}")
-def get_entry(entry_id: str, response: Response, store: Store = Depends(request_store)):
+def get_entry(entry_id: str, response: Response, store: Store = Depends(store_dependency)):
     response.headers["Cache-Control"] = "no-store"
     return store.get(entry_id)
 
 
 @router.get('/entries/{entry_id}/version-permission')
-def version_permission(entry_id: str, response: Response, store: Store = Depends(request_store)):
+def version_permission(entry_id: str, response: Response, store: Store = Depends(store_dependency)):
     response.headers['Cache-Control'] = 'no-store'
     return source_module('version_permissions').permission(store, entry_id)
 
 
 @router.delete('/entries/{entry_id}/version-permission')
-def revoke_version_permission(entry_id: str, response: Response, store: Store = Depends(request_store)):
+def revoke_version_permission(entry_id: str, response: Response, store: Store = Depends(store_dependency)):
     response.headers['Cache-Control'] = 'no-store'
     source_module('version_permissions').permission(store, entry_id, revoke=True)
     return source_module('version_permissions').permission(store, entry_id)
 
 
 @router.put("/entries/{entry_id}")
-def update(entry_id: str, entry: EntryUpdate, store: Store = Depends(request_store)):
+def update(entry_id: str, entry: EntryUpdate, store: Store = Depends(store_dependency)):
     return store.update(entry_id, entry)
 
 
 @router.post('/entries/{entry_id}/versions', status_code=201)
-def add_version(entry_id: str, request: VersionInput, store: Store = Depends(request_store)):
+def add_version(entry_id: str, request: VersionInput, store: Store = Depends(store_dependency)):
     return store.add_version(entry_id, request)
 
 
 @router.get('/entries/{entry_id}/versions/{version_id}/files/{file_id}')
-def version_file(entry_id: str, version_id: str, file_id: str, response: Response, store: Store = Depends(request_store)):
+def version_file(entry_id: str, version_id: str, file_id: str, response: Response, store: Store = Depends(store_dependency)):
     name, content, media_type = read_entry_file(store, store.get(entry_id), version_id, file_id)
     response.headers.update({'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
                              'Content-Security-Policy': "default-src 'none'; sandbox"})
@@ -614,13 +653,13 @@ def revision_query(revision: str = Query(..., pattern=r"^[1-9][0-9]*$", max_leng
 
 
 @router.delete("/entries/{entry_id}")
-def delete(entry_id: str, revision: int = Depends(revision_query), store: Store = Depends(request_store)):
+def delete(entry_id: str, revision: int = Depends(revision_query), store: Store = Depends(store_dependency)):
     item = store.trash(entry_id, revision)
     return {"deleted": entry_id, "files_deleted": False, 'item': item, 'state': item['state']}
 
 
 @router.get("/entries/{entry_id}/file")
-def file_content(entry_id: str, response: Response, preview: bool = False, store: Store = Depends(request_store)):
+def file_content(entry_id: str, response: Response, preview: bool = False, store: Store = Depends(store_dependency)):
     entry = store.get(entry_id)
     name, content, media_type = read_entry_file(store, entry)
     if preview and PurePosixPath(name).suffix.lower() not in TEXT_TYPES:
@@ -676,16 +715,19 @@ def request_source(profile: str | None = Query(None, max_length=160)):
     return source_module('native_history').SourceAdapter(home)
 
 
+source_dependency = offloaded(request_source)
+
+
 @router.get('/sources/sessions')
 def source_sessions(q: str = Query('', max_length=200), limit: int = Query(30, ge=1, le=100),
-                    offset: int = Query(0, ge=0, le=1000), source=Depends(request_source)):
+                    offset: int = Query(0, ge=0, le=1000), source=Depends(source_dependency)):
     return source.sessions(q, limit, offset)
 
 
 @router.get('/sources/sessions/{session_id}/artifacts')
 def source_artifacts(session_id: str, q: str = Query('', max_length=200),
                      limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0, le=4000),
-                     source=Depends(request_source)):
+                     source=Depends(source_dependency)):
     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', session_id):
         raise HTTPException(422, 'Invalid conversation')
     return source_module('artifact_source').candidates(source_api(), source_module('native_history'),
@@ -699,7 +741,7 @@ class SourceEntry(EntryInput):
 
 
 @router.post('/sources/register', status_code=201)
-def register_source(entry: SourceEntry, store: Store = Depends(request_store)):
+def register_source(entry: SourceEntry, store: Store = Depends(store_dependency)):
     home = store.home
     if entry.files and entry.files != [entry.file]:
         raise HTTPException(422, 'Use register-many to validate every selected source')
@@ -736,7 +778,7 @@ def preview_thumbnail(home, name, content, response):
 
 
 @router.post('/sources/thumbnail')
-def source_thumbnail(selected: SourceThumbnail, response: Response, store: Store = Depends(request_store)):
+def source_thumbnail(selected: SourceThumbnail, response: Response, store: Store = Depends(store_dependency)):
     home = store.home
     artifacts = source_module('artifact_source')
     def authorize():
@@ -776,7 +818,7 @@ class SourceCollection(EntryInput):
 
 
 @router.post('/sources/register-many', status_code=201)
-def register_many(entry: RegisterMany, store: Store = Depends(request_store)):
+def register_many(entry: RegisterMany, store: Store = Depends(store_dependency)):
     if any(selected.session_id and selected.session_id != entry.session_id for selected in entry.selections):
         raise HTTPException(422, 'Every selection must belong to the validated conversation')
     if entry.file is not None or entry.files:
@@ -871,12 +913,12 @@ class GeneratedDetails(BaseModel):
 
 
 @router.get('/generation/settings')
-def generation_settings(store: Store = Depends(request_store)):
+def generation_settings(store: Store = Depends(store_dependency)):
     return {'previous_exchanges': store.settings()['context_messages']}
 
 
 @router.put('/generation/settings')
-def save_generation_settings(settings: GenerationSettings, store: Store = Depends(request_store)):
+def save_generation_settings(settings: GenerationSettings, store: Store = Depends(store_dependency)):
     store.save_settings({'context_messages': settings.previous_exchanges})
     return generation_settings(store)
 
@@ -904,7 +946,7 @@ def file_stamp(home, ref):
 
 
 @router.post('/generation/draft')
-async def generate_draft(request: GenerationRequest, store: Store = Depends(request_store)):
+async def generate_draft(request: GenerationRequest, store: Store = Depends(store_dependency)):
     home=store.home
     with _runtime.lock:
         ctx=_runtime.bindings.get(home)
@@ -971,7 +1013,7 @@ async def generate_draft(request: GenerationRequest, store: Store = Depends(requ
 def thumbnail(entry_id: str, response: Response,
               version_id: str | None = Query(None, min_length=1, max_length=160),
               file_id: str | None = Query(None, min_length=1, max_length=160),
-              store: Store = Depends(request_store)):
+              store: Store = Depends(store_dependency)):
     entry=store.get(entry_id)
     name, content, _ = read_entry_file(store, entry, version_id, file_id)
     result = preview_thumbnail(store.home, name, content, response)
